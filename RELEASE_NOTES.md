@@ -1,5 +1,16 @@
 # Mediaway v0.2.3
 
+## Unreleased
+
+### Added
+
+- `rtp-core`: `h264::Packetizer::packetize_bytes` / `hevc::Packetizer::packetize_bytes` return `OutgoingPacket`s whose bodies are `Bytes` slices of the NAL unit (FU framing kept inline), plus `write_into` on `OutgoingPacket` / `RtpPacket` to serialize straight into a caller-owned send buffer
+- `mediaway-common`: `BufferPool`, a single-owner CPU byte-buffer pool (`take` / `recycle` / `recycle_bytes`), and a `BytesMut` re-export
+
+### Changed
+
+- Fewer copies and allocations on mux/packetize hot paths with byte-identical output: MPEG-TS PES packetization no longer concatenates header + access unit, WebM blocks/clusters no longer stage a per-element body buffer, RTP `packetize` uses one shared allocation per NAL instead of one per fragment, and FLV demux payloads slice the tag buffer instead of copying
+
 ## What's new
 
 ### Added

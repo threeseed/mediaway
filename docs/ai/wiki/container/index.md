@@ -12,7 +12,7 @@
 | [general-containers](general-containers.md) | `flv-core`/`mpeg-ts-core` — general containers, all facade-wired |
 | [ffi-replay-ring](ffi-replay-ring.md) | C ABI 8: replay ring (Bytes / Stored), owned clip snapshots, MP4 placements — no C video-packet source yet (ADR-0009) |
 | [rtmp](rtmp.md) | `rtmp` — publish-client protocol core (implemented, handshake unverified against a real server), reuses FLV tag-body byte shapes |
-| [rtp](rtp.md) | `rtp-core` — RTP payloadization for H.264/HEVC (implemented); no aggregation packets/RTCP/SRTP yet |
+| [rtp](rtp.md) | `rtp-core` — RTP payloadization for H.264/HEVC (implemented; zero-copy `packetize_bytes`, see [common/buffer-pool](../common/buffer-pool.md)); no aggregation packets/RTCP/SRTP yet |
 | [webm](webm.md) | `ebml-webm` core + `mediaway-container::webm` — mux + demux, deferred items |
 | [replay-ring](replay-ring.md) | `replay::ReplayRing`: last N seconds of encoded packets, keyframe cuts in decode order; payloads as `Bytes` or on-disk `StoredPayload` (ADR-0004) |
 | [cli-tools](cli-tools.md) | `mediaway-avprobe` / `mediaway-avcli` flag subsets over the facade |
