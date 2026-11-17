@@ -29,7 +29,7 @@ use super::error::H264Error;
 /// `normAdjust` (ITU-T H.264 § 8.5.9, the `m`-indexed part of `LevelScale4x4`), indexed
 /// `[qP % 6][position class]` where position class `0` = both row/col even, `1` = both
 /// odd, `2` = mixed (§ 8.5.9's `v` pattern).
-const NORM_ADJUST: [[i64; 3]; 6] = [
+const NORM_ADJUST: [[i32; 3]; 6] = [
     [10, 16, 13],
     [11, 18, 14],
     [13, 20, 16],
@@ -40,7 +40,7 @@ const NORM_ADJUST: [[i64; 3]; 6] = [
 
 /// Default (`Flat_4x4_16`) weight scale factor used everywhere — see module docs on the
 /// custom-scaling-list scope cut.
-const FLAT_WEIGHT_SCALE: i64 = 16;
+const FLAT_WEIGHT_SCALE: i32 = 16;
 
 /// `QPi` (`Clip3(0, 51, QPy + chroma_qp_index_offset)`) to `QPc` mapping for `QPi` `30..=51`
 /// (ITU-T H.264 Table 8-15); `QPi < 30` maps to itself.
@@ -77,9 +77,8 @@ enum Shift {
 impl Shift {
     /// Resolve `qP / 6` against the spec's threshold `pivot` (`4` for normal coefficients,
     /// `6` for luma DC). Errors mirror the former per-coefficient checked arithmetic: a
-    /// shift amount outside `0..64` is [`H264Error::FieldOverflow`]. (One difference: the
-    /// former code skipped zero coefficients before checking, so an all-zero block with a
-    /// QP far outside `0..=51` used to succeed; the decoder only ever passes `0..=51`.)
+    /// shift amount outside `0..64` is [`H264Error::FieldOverflow`]. All-zero blocks
+    /// return before this is called, matching the former per-coefficient zero skip.
     fn resolve(qp: i32, pivot: i32) -> Result<Self, H264Error> {
         let shift = qp.div_euclid(6);
         if shift >= pivot {
@@ -98,8 +97,8 @@ impl Shift {
     }
 }
 
-/// `LevelScale4x4` (flat weights) for `qp`, per position class.
-fn level_scales(qp: i32) -> [i64; 3] {
+/// `LevelScale4x4` (flat weights) for `qp`, per position class (each `<= 16 * 29`).
+fn level_scales(qp: i32) -> [i32; 3] {
     let row = NORM_ADJUST[usize::try_from(qp.rem_euclid(6)).unwrap_or(0)];
     [
         FLAT_WEIGHT_SCALE * row[0],
@@ -108,31 +107,73 @@ fn level_scales(qp: i32) -> [i64; 3] {
     ]
 }
 
-/// Apply `scale[i]` and `shift` to every coefficient, then range-check the whole block
-/// back into `i32` once.
+/// Branch-free all-zero test (one OR-reduction).
+fn is_zero<const N: usize>(coeffs: &[i32; N]) -> bool {
+    coeffs.iter().fold(0, |acc, &c| acc | c) == 0
+}
+
+/// Coefficient magnitude below which the whole dequant fits `i32`: `|c| < 2^18`,
+/// `scale <= 16 * 29 < 2^9`, `Up` shift `<= 4` gives `|c * scale << up| < 2^31`.
+const I32_SAFE_LEVEL: u32 = 1 << 18;
+
+/// Dequantize a block: `scale[i]` per coefficient and the `qp`-derived shift (`pivot` is
+/// the spec's threshold, see [`Shift::resolve`]).
 ///
-/// Overflow analysis (why the per-coefficient math needs no checked ops): `|c| < 2^31`,
-/// `scale <= 16 * 29 < 2^9`, so `|c * scale| < 2^40`; `Up` shifts are at most
-/// `51 / 6 - 4 = 4` for any in-range QP (larger shifts from an out-of-range QP wrap the
-/// same way the former `checked_shl` did — it only checked the shift amount), and the
-/// final `i32` range check reports [`H264Error::FieldOverflow`] exactly when the former
-/// per-coefficient `i32::try_from` did. A zero coefficient produces `0` on both branches
-/// (`round < 2^down`), so the former `c == 0` skip is not needed for bit-exactness.
+/// Three tiers, all bit-exact with the former per-coefficient checked arithmetic:
+/// 1. **All-zero block** (the common case in real streams, and every block of a `cbp == 0`
+///    macroblock): handled by the callers via [`is_zero`] *before* building the scale
+///    table — same as the former per-coefficient `c == 0` skip, including not validating
+///    `qp` for such blocks.
+/// 2. **Typical levels** (`|c| < 2^18`, in-range QP): branch-free `i32` multiply/shift over
+///    all lanes — narrow enough for SSE2/NEON `i32` vector multiplies.
+/// 3. **Adversarial levels**: the same math in `i64`, then one block-wide range check that
+///    reports [`H264Error::FieldOverflow`] exactly when the former per-coefficient
+///    `i32::try_from` did. `|c * scale| < 2^40`, so no `i64` product can overflow; `Up`
+///    shifts from a wildly out-of-range QP wrap the same way the former `checked_shl` did
+///    (it only checked the shift amount).
+///
+/// A zero coefficient yields `0` on both shift branches (`round < 2^down`), so tiers 2/3
+/// need no per-lane zero test.
 fn scale_block<const N: usize>(
     coeffs: &[i32; N],
-    scale: &[i64; N],
-    shift: Shift,
+    scale: &[i32; N],
+    qp: i32,
+    pivot: i32,
 ) -> Result<[i32; N], H264Error> {
+    let shift = Shift::resolve(qp, pivot)?;
+    let max_level = coeffs.iter().fold(0u32, |m, &c| m.max(c.unsigned_abs()));
+    let narrow_ok = max_level < I32_SAFE_LEVEL
+        && match shift {
+            Shift::Up(up) => up <= 4,
+            Shift::Down(down, _) => down <= 6,
+        };
+    if narrow_ok {
+        let mut out = [0i32; N];
+        match shift {
+            Shift::Up(up) => {
+                for ((o, &c), &s) in out.iter_mut().zip(coeffs).zip(scale) {
+                    *o = (c * s) << up;
+                }
+            }
+            Shift::Down(down, round) => {
+                let round = round as i32;
+                for ((o, &c), &s) in out.iter_mut().zip(coeffs).zip(scale) {
+                    *o = (c * s + round) >> down;
+                }
+            }
+        }
+        return Ok(out);
+    }
     let mut wide = [0i64; N];
     match shift {
         Shift::Up(up) => {
             for ((w, &c), &s) in wide.iter_mut().zip(coeffs).zip(scale) {
-                *w = (i64::from(c) * s) << up;
+                *w = (i64::from(c) * i64::from(s)) << up;
             }
         }
         Shift::Down(down, round) => {
             for ((w, &c), &s) in wide.iter_mut().zip(coeffs).zip(scale) {
-                *w = (i64::from(c) * s + round) >> down;
+                *w = (i64::from(c) * i64::from(s) + round) >> down;
             }
         }
     }
@@ -166,9 +207,12 @@ fn narrow<const N: usize>(wide: &[i64; N]) -> Result<[i32; N], H264Error> {
 /// [`H264Error::FieldOverflow`] if a dequantized value does not fit `i32` (only reachable
 /// with an adversarially large decoded coefficient level) or `qp` is wildly out of range.
 pub(super) fn dequant_normal(raster: &[i32; 16], qp: i32) -> Result<[i32; 16], H264Error> {
+    if is_zero(raster) {
+        return Ok([0; 16]);
+    }
     let classes = level_scales(qp);
     let scale = POSITION_CLASS.map(|class| classes[class]);
-    scale_block(raster, &scale, Shift::resolve(qp, 4)?)
+    scale_block(raster, &scale, qp, 4)
 }
 
 /// Dequantize 16 luma DC coefficients (already inverse-Hadamard-transformed by
@@ -180,8 +224,11 @@ pub(super) fn dequant_normal(raster: &[i32; 16], qp: i32) -> Result<[i32; 16], H
 ///
 /// [`H264Error::FieldOverflow`] on adversarial-input arithmetic overflow.
 pub(super) fn dequant_luma_dc(raster: &[i32; 16], qp: i32) -> Result<[i32; 16], H264Error> {
+    if is_zero(raster) {
+        return Ok([0; 16]);
+    }
     let scale = [level_scales(qp)[0]; 16];
-    scale_block(raster, &scale, Shift::resolve(qp, 6)?)
+    scale_block(raster, &scale, qp, 6)
 }
 
 /// Dequantize the chroma DC 2x2 block (already inverse-Hadamard-transformed by
@@ -192,11 +239,14 @@ pub(super) fn dequant_luma_dc(raster: &[i32; 16], qp: i32) -> Result<[i32; 16], 
 ///
 /// [`H264Error::FieldOverflow`] on adversarial-input arithmetic overflow.
 pub(super) fn dequant_chroma_dc(c: &[i32; 4], qpc: i32) -> Result<[i32; 4], H264Error> {
+    if is_zero(c) {
+        return Ok([0; 4]);
+    }
     let up = u32::try_from(qpc.div_euclid(6)).map_err(|_err| H264Error::FieldOverflow)?;
     if up >= i64::BITS {
         return Err(H264Error::FieldOverflow);
     }
-    let scale = level_scales(qpc)[0];
+    let scale = i64::from(level_scales(qpc)[0]);
     let mut wide = [0i64; 4];
     for (w, &value) in wide.iter_mut().zip(c) {
         *w = ((i64::from(value) * scale) << up) >> 5;

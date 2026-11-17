@@ -103,8 +103,8 @@ fn inverse_hadamard_2x2_of_all_ones_collapses_to_dc_only() {
 /// Former (pre-vectorization) per-coefficient dequant, kept as a bit-exactness oracle for
 /// the branch-free rewrite.
 fn reference_dequant(c: i64, qp: i32, class: usize, pivot: i32) -> Result<i32, H264Error> {
-    let level_scale = FLAT_WEIGHT_SCALE
-        .checked_mul(NORM_ADJUST[usize::try_from(qp.rem_euclid(6)).unwrap()][class])
+    let level_scale = i64::from(FLAT_WEIGHT_SCALE)
+        .checked_mul(NORM_ADJUST[usize::try_from(qp.rem_euclid(6)).unwrap()][class].into())
         .ok_or(H264Error::FieldOverflow)?;
     let product = c.checked_mul(level_scale).ok_or(H264Error::FieldOverflow)?;
     let shift = qp.div_euclid(6);
@@ -172,7 +172,7 @@ fn dequant_rewrite_is_bit_exact_with_reference_over_random_blocks() {
         let expect: Result<Vec<i32>, H264Error> = chroma
             .iter()
             .map(|&v| {
-                let s = FLAT_WEIGHT_SCALE * NORM_ADJUST[(qp % 6) as usize][0];
+                let s = i64::from(FLAT_WEIGHT_SCALE * NORM_ADJUST[(qp % 6) as usize][0]);
                 let shifted = (i64::from(v) * s) << (qp / 6);
                 i32::try_from(shifted >> 5).map_err(|_err| H264Error::FieldOverflow)
             })

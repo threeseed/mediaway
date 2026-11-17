@@ -1,5 +1,15 @@
 # Mediaway v0.2.3
 
+## Unreleased
+
+### Added
+
+- `mediaway-sw::colorconv` and `mediaway-sw::scale`: dependency-free CPU (`sw` path) NV12 <-> I420, I420/NV12 -> RGBA/BGRA (BT.601/BT.709, video/full range) and a bilinear scaler for planes and RGBA, with row-level APIs for caller-side parallelism
+
+### Changed
+
+- `mediaway-sw` H.264 software decode: faster dequantization, inverse transform, intra prediction and residual add (bit-exact; ~10% on a synthetic 720p I-frame)
+
 ## What's new
 
 ### Added

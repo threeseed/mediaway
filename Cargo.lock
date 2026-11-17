@@ -1625,6 +1625,7 @@ dependencies = [
 name = "mediaway-sw"
 version = "0.2.3"
 dependencies = [
+ "criterion",
  "mediaway-common",
  "rav1e",
  "sonora",

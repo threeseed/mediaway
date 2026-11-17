@@ -14,6 +14,7 @@
 | [../license/sw-opus](../license/sw-opus.md) | `mediaway-sw::opus` — real Opus decode via `unsafe-libopus`, platform-independent SW path; wrapped as `mediaway_decoder::SwOpusAudioDecoder` |
 | [../platform/windows-opus](../platform/windows-opus.md) | Windows: inbox WMF Opus decoder MFT (`CMSOpusDecMFT`) — **public** as `mediaway_decoder::windows::WmfOpusDecoder`; verified end-to-end (ffmpeg Opus → exact PCM) |
 | [../platform/windows-aac](../platform/windows-aac.md) | Windows: inbox WMF AAC decoder MFT (`CMSAACDecMFT`) as `mediaway_decoder::windows::WmfAacDecoder` — hardware-verified (WMF AAC encode → decode, sample-exact); requires the stream's `AudioSpecificConfig` |
+| [sw-cpu-pixels](sw-cpu-pixels.md) | `mediaway-sw::{colorconv, scale}` CPU NV12/I420/RGBA conversion + bilinear scaler (`sw`); H.264 SW decode hot-loop notes |
 | [web-opus-design](web-opus-design.md) | Web: first audio decode surface in `mediaway-decoder::web` (`is_webcodecs_audio_decode_supported`, `decode_audio_chunks`), codec-generalized, exercised via Opus — wasm32 compile-verified only |
 
 `AudioDecoder` trait ([`crates/mediaway-decoder/adr/0003-audio-decoder-trait.md`](../../../crates/mediaway-decoder/adr/0003-audio-decoder-trait.md)):

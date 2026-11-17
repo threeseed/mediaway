@@ -6,6 +6,8 @@
 | [0002](0002-rav1e-av1-encode.md) | AV1 encode via `rav1e`, sans-io adapter around its `Context`/`Frame` API | Accepted |
 | [0004](0004-codec-feature-split.md) | Codec families behind cargo features; low-level Opus / APM block APIs | Accepted |
 
+| [0005](0005-cpu-colorconv-and-scaler.md) | CPU colour conversion and bilinear scaler (`sw` path), autovectorized | Accepted |
+
 Template: [`template.md`](template.md)
 
 Crate-local only. Workspace ADRs: [`docs/adr/`](../../../docs/adr/).
