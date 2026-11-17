@@ -14,6 +14,8 @@
   caller-supplied `GpuBufferHandle::DmaBuf` surface (`vaCreateSurfaces` +
   `cros_libva::ExternalBufferDescriptor`) and encodes it directly, no CPU upload. Forces
   all-IDR for the session (no GOP/P-frame references); each imported surface is single-use.
+  Covers H.264 **and HEVC** (`VaapiHevcVideoEncoder`, 2026-11-17, shared `dmabuf.rs`);
+  VP9/AV1 still CPU-upload only. Compile/clippy-verified on Linux, no VA-API hardware.
 - Rate control: `VA_RC_CQP` fixed QP only; **every pushed frame is an independent IDR by
   default** (`gop_size <= 1`) — real single-forward-reference P-frame GOP (H.264/HEVC/VP9) is
   **implemented**, capability-gated where applicable

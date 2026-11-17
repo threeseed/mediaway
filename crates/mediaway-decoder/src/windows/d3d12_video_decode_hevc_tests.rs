@@ -189,6 +189,7 @@ fn hevc_decode_idr_and_p_frame_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut encoder = match WindowsVideoEncoder::open(&enc_cfg) {
         Ok(e) => e,

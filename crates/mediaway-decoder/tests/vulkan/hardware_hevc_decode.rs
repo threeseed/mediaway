@@ -104,6 +104,7 @@ fn decode_real_encoder_produced_idr_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut encoder = match VulkanVideoEncoder::open(&encoder_config) {
         Ok(encoder) => encoder,

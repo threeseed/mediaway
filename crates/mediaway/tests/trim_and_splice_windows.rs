@@ -63,6 +63,7 @@ fn encode_frames(frames: &[VideoFrame]) -> Option<Vec<u8>> {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut enc = match WindowsVideoEncoder::open(&cfg) {
         Ok(e) => e,

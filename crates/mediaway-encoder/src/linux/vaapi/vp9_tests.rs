@@ -27,6 +27,7 @@ fn tiny_vp9_gop_cfg(width: u32, height: u32, gop_size: u32) -> VideoEncoderConfi
         gop_size,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     }
 }
 

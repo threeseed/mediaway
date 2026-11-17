@@ -77,6 +77,7 @@ fn encode_with_duration(codec: CodecKind, ticks: &[i64], duration: u64) -> Optio
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut encoder = match WindowsVideoEncoder::open(&config) {
         Ok(encoder) => encoder,

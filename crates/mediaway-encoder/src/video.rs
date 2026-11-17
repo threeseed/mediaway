@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+use core::num::NonZeroU32;
+
 use crate::error::EncodeError;
 use mediaway_common::{
     CodecKind, ColorRange, GpuDeviceHandle, Packet, PixelFormat, Rational, StreamInfo, VideoFrame,
@@ -77,6 +79,17 @@ pub struct VideoEncoderConfig {
     /// to its `gop_size` behavior with no error and must document that
     /// fallback on its own encoder type's rustdoc, per `caveats-and-clarity.md`.
     pub intra_refresh_period: Option<u32>,
+    /// Requested pipelining depth: how many frames the backend may hold in flight (submitted,
+    /// output not yet returned) before `push_frame` must wait. `None` (every constructor's
+    /// value, zero behavior change) keeps the backend's own default. A request, not a
+    /// guarantee, ignored by every backend not listed below (VA-API and Vulkan encode
+    /// synchronously per `push_frame`; the WMF async MFT's depth is driven by its own
+    /// `METransformNeedInput` events with no portable property; other backends have no knob
+    /// wired yet — per-backend table in ADR-0007). Honored today by `VideoToolbox`
+    /// (`kVTCompressionPropertyKey_MaxFrameDelayCount`) and oneVPL `QuickSync`
+    /// (`mfxVideoParam::AsyncDepth`). Higher depth trades latency and memory (one more
+    /// surface/frame per step) for throughput. See `adr/0007-in-flight-depth-and-pipelining.md`.
+    pub in_flight: Option<NonZeroU32>,
 }
 
 /// Target bitrate + optional VBV buffer size for CBR-style rate control
@@ -107,6 +120,7 @@ impl VideoEncoderConfig {
             gop_size: 1,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         }
     }
 
@@ -126,6 +140,7 @@ impl VideoEncoderConfig {
             gop_size: 1,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         }
     }
 
@@ -145,6 +160,7 @@ impl VideoEncoderConfig {
             gop_size: 1,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         }
     }
 
@@ -164,6 +180,7 @@ impl VideoEncoderConfig {
             gop_size: 1,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         }
     }
 }

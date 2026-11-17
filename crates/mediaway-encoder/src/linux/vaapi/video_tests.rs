@@ -29,6 +29,7 @@ fn tiny_h264_gop_cfg(width: u32, height: u32, gop_size: u32) -> VideoEncoderConf
         gop_size,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     }
 }
 
