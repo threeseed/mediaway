@@ -21,23 +21,53 @@ const PAYLOAD_CAPACITY: usize = PACKET_LEN - 4; // 184 bytes when no adaptation 
 /// capacity by 2 bytes; any packet (first or last) that would otherwise be
 /// shorter than 184 payload bytes gets adaptation-field stuffing to reach the
 /// fixed 188-byte packet size — every TS packet is always exactly 188 bytes.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "single-slice form kept for tests")
+)]
 pub(crate) fn write_ts_packets(
     out: &mut Vec<u8>,
     pid: u16,
     cc: &mut u8,
-    mut payload: &[u8],
+    payload: &[u8],
+    pusi: bool,
+    random_access: bool,
+) {
+    write_ts_packets_split(out, pid, cc, &[], payload, pusi, random_access);
+}
+
+/// Same as [`write_ts_packets`] but the logical payload is `head ++ body`,
+/// given as two slices so callers never concatenate (e.g. PES header + access
+/// unit) into a temporary buffer: each byte is copied exactly once, straight
+/// into `out`. Output is byte-identical to `write_ts_packets(head ++ body)`.
+pub(crate) fn write_ts_packets_split(
+    out: &mut Vec<u8>,
+    pid: u16,
+    cc: &mut u8,
+    mut head: &[u8],
+    mut body: &[u8],
     mut pusi: bool,
     random_access: bool,
 ) {
+    out.reserve(
+        (head.len() + body.len())
+            .div_ceil(PAYLOAD_CAPACITY - 2)
+            .max(1)
+            * PACKET_LEN,
+    );
     let mut first = true;
     loop {
         let want_flags = first && random_access;
         let reserved_min = if want_flags { 2 } else { 0 };
         let available = PAYLOAD_CAPACITY - reserved_min;
-        let take = payload.len().min(available);
-        let chunk = &payload[..take];
-        payload = &payload[take..];
-        let is_final = payload.is_empty();
+        let take = (head.len() + body.len()).min(available);
+        let from_head = take.min(head.len());
+        let from_body = take - from_head;
+        let (head_chunk, head_rest) = head.split_at(from_head);
+        let (body_chunk, body_rest) = body.split_at(from_body);
+        head = head_rest;
+        body = body_rest;
+        let is_final = head.is_empty() && body.is_empty();
         let budget = if is_final {
             PAYLOAD_CAPACITY - take
         } else {
@@ -53,7 +83,8 @@ pub(crate) fn write_ts_packets(
         if budget > 0 {
             write_adaptation_field(out, budget, first && random_access);
         }
-        out.extend_from_slice(chunk);
+        out.extend_from_slice(head_chunk);
+        out.extend_from_slice(body_chunk);
 
         *cc = (*cc + 1) & 0x0F;
         pusi = false;

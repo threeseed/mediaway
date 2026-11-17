@@ -3,7 +3,7 @@
 #![cfg(test)]
 #![allow(clippy::unwrap_used, reason = "unit tests")]
 
-use super::{PACKET_LEN, parse_ts_packet, write_ts_packets};
+use super::{PACKET_LEN, parse_ts_packet, write_ts_packets, write_ts_packets_split};
 
 fn packets_of(bytes: &[u8]) -> Vec<&[u8]> {
     assert_eq!(bytes.len() % PACKET_LEN, 0);
@@ -89,4 +89,29 @@ fn continuity_counter_increments_and_wraps() {
 fn rejects_bad_sync_byte() {
     let bad = vec![0u8; PACKET_LEN];
     assert!(parse_ts_packet(&bad).is_err());
+}
+
+#[test]
+fn split_write_is_byte_identical_to_concatenated_write() {
+    let data: Vec<u8> = (0..1000u32).map(|i| (i * 7 + 3).to_le_bytes()[0]).collect();
+    for total in [
+        0usize, 1, 2, 181, 182, 183, 184, 185, 366, 367, 368, 369, 1000,
+    ] {
+        for head_len in [0usize, 1, 14, 19, 182, 184, 185] {
+            if head_len > total {
+                continue;
+            }
+            for ra in [false, true] {
+                let (head, body) = data[..total].split_at(head_len);
+                let mut expected = Vec::new();
+                let mut cc_a = 5;
+                write_ts_packets(&mut expected, 300, &mut cc_a, &data[..total], true, ra);
+                let mut actual = Vec::new();
+                let mut cc_b = 5;
+                write_ts_packets_split(&mut actual, 300, &mut cc_b, head, body, true, ra);
+                assert_eq!(expected, actual, "total={total} head={head_len} ra={ra}");
+                assert_eq!(cc_a, cc_b);
+            }
+        }
+    }
 }

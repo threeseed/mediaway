@@ -5,12 +5,14 @@
 use smallvec::SmallVec;
 
 use crate::error::Error;
-use crate::packet::write_ts_packets;
+use crate::packet::write_ts_packets_split;
 use crate::pes::{build_pes_header, stream_id_for};
 use crate::psi::{build_pat_section, build_pmt_section};
 use crate::types::{ElementaryStream, StreamType};
 
 const PAT_PID: u16 = 0;
+/// PSI `pointer_field = 0` (section starts immediately after it).
+const POINTER_FIELD: [u8; 1] = [0];
 
 const fn validate_pid(pid: u16) -> Result<(), Error> {
     if pid > 0x1FFF || pid == 0 || pid == 1 {
@@ -56,11 +58,12 @@ impl Muxer {
     /// Write one PAT packet + one PMT packet describing this program's streams.
     pub fn write_pat_pmt(&mut self, out: &mut Vec<u8>) {
         let pat = build_pat_section(1, self.program_number, self.pmt_pid);
-        write_ts_packets(
+        write_ts_packets_split(
             out,
             PAT_PID,
             &mut self.pat_cc,
-            &pusi_payload(&pat),
+            &POINTER_FIELD,
+            &pat,
             true,
             false,
         );
@@ -68,11 +71,12 @@ impl Muxer {
         let elementary: SmallVec<[ElementaryStream; 4]> =
             self.streams.iter().map(|(s, _)| *s).collect();
         let pmt = build_pmt_section(self.program_number, &elementary);
-        write_ts_packets(
+        write_ts_packets_split(
             out,
             self.pmt_pid,
             &mut self.pmt_cc,
-            &pusi_payload(&pmt),
+            &POINTER_FIELD,
+            &pmt,
             true,
             false,
         );
@@ -97,18 +101,12 @@ impl Muxer {
             .ok_or(Error::UnknownPid(pid))?;
         let is_video = matches!(stream.stream_type, StreamType::H264 | StreamType::Hevc);
 
-        let mut payload = build_pes_header(stream_id_for(is_video), data.len(), pts_90k, dts_90k);
-        payload.extend_from_slice(data);
-        write_ts_packets(out, pid, cc, &payload, true, random_access);
+        // PES header lives on the stack; the access unit is copied once,
+        // directly into the TS packets (no header+AU concatenation buffer).
+        let header = build_pes_header(stream_id_for(is_video), data.len(), pts_90k, dts_90k);
+        write_ts_packets_split(out, pid, cc, &header, data, true, random_access);
         Ok(())
     }
-}
-
-fn pusi_payload(section: &[u8]) -> Vec<u8> {
-    let mut payload = Vec::with_capacity(1 + section.len());
-    payload.push(0); // pointer_field = 0 (section starts immediately)
-    payload.extend_from_slice(section);
-    payload
 }
 
 #[cfg(test)]
