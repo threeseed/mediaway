@@ -7,6 +7,7 @@ name = "adts-core"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "criterion",
  "thiserror 2.0.20",
 ]
 
@@ -871,6 +872,7 @@ name = "ebml-webm"
 version = "0.2.1"
 dependencies = [
  "bytes",
+ "criterion",
  "smallvec",
  "thiserror 2.0.20",
 ]
@@ -981,6 +983,7 @@ name = "flv-core"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "criterion",
  "thiserror 2.0.20",
 ]
 
@@ -1201,6 +1204,7 @@ name = "iso-bmff"
 version = "0.1.3"
 dependencies = [
  "bytes",
+ "criterion",
  "iso-cenc",
  "memchr",
  "smallvec",
@@ -1490,6 +1494,7 @@ name = "mediaway-container"
 version = "0.2.3"
 dependencies = [
  "adts-core",
+ "criterion",
  "ebml-webm",
  "flv-core",
  "iso-bmff",
@@ -1677,6 +1682,7 @@ name = "mpeg-ts-core"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "criterion",
  "smallvec",
  "thiserror 2.0.20",
 ]
@@ -2065,6 +2071,7 @@ name = "ogg-core"
 version = "0.1.1"
 dependencies = [
  "bytes",
+ "criterion",
  "thiserror 2.0.20",
 ]
 
@@ -2502,6 +2509,7 @@ name = "rtp-core"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "criterion",
  "thiserror 2.0.20",
 ]
 

@@ -26,3 +26,10 @@ full = ["audio", "video", "mux", "demux"]
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+criterion = { workspace = true }
+
+[[bench]]
+name = "pure_mp4"
+harness = false
