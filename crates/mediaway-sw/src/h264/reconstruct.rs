@@ -221,20 +221,23 @@ fn write_block<const N: usize>(
     y0: usize,
     block: &[u8],
 ) {
-    for row in 0..N {
+    for (row, src) in block.as_chunks::<N>().0.iter().take(N).enumerate() {
         let start = (y0 + row) * stride + x0;
-        plane[start..start + N].copy_from_slice(&block[row * N..row * N + N]);
+        plane[start..start + N].copy_from_slice(src);
     }
 }
 
 /// Add a decoded 4x4 residual to the (already-written) prediction already in `plane` at
 /// `(x0, y0)`, clipping to `0..=255` (ITU-T H.264 § 8.5.13's implicit `Clip1`).
+///
+/// One bounds check per row (the `[u8; 4]` row view), then a fixed-width, branch-free
+/// add + clamp the compiler can keep in vector registers.
 fn add_residual_4x4(plane: &mut [u8], stride: usize, x0: usize, y0: usize, residual: &[i32; 16]) {
-    for ry in 0..4 {
-        for rx in 0..4 {
-            let idx = (y0 + ry) * stride + x0 + rx;
-            let value = i32::from(plane[idx]) + residual[ry * 4 + rx];
-            plane[idx] = value.clamp(0, 255) as u8;
+    for (ry, res_row) in residual.as_chunks::<4>().0.iter().enumerate() {
+        let start = (y0 + ry) * stride + x0;
+        let row = &mut plane[start..start + 4];
+        for (px, &r) in row.iter_mut().zip(res_row) {
+            *px = (i32::from(*px) + r).clamp(0, 255) as u8;
         }
     }
 }
@@ -444,27 +447,26 @@ fn decode_i_pcm(
     let x0 = mb_col * 16;
     let y0 = mb_row * 16;
     for row in 0..16 {
-        for col in 0..16 {
-            let sample = reader.read_bits(8)?;
-            picture.y[(y0 + row) * y_stride + x0 + col] = sample as u8;
-        }
+        let start = (y0 + row) * y_stride + x0;
+        read_samples(reader, &mut picture.y[start..start + 16])?;
     }
 
     let c_stride = picture.c_stride;
     let cx0 = mb_col * 8;
     let cy0 = mb_row * 8;
-    for plane_idx in 0..2usize {
-        let plane: &mut [u8] = if plane_idx == 0 {
-            picture.u.as_mut_slice()
-        } else {
-            picture.v.as_mut_slice()
-        };
+    for plane in [picture.u.as_mut_slice(), picture.v.as_mut_slice()] {
         for row in 0..8 {
-            for col in 0..8 {
-                let sample = reader.read_bits(8)?;
-                plane[(cy0 + row) * c_stride + cx0 + col] = sample as u8;
-            }
+            let start = (cy0 + row) * c_stride + cx0;
+            read_samples(reader, &mut plane[start..start + 8])?;
         }
+    }
+    Ok(())
+}
+
+/// Fill `dst` with raw 8-bit `pcm_sample_*` values (reader is byte-aligned by the caller).
+fn read_samples(reader: &mut BitReader<'_>, dst: &mut [u8]) -> Result<(), H264Error> {
+    for px in dst {
+        *px = reader.read_bits(8)? as u8;
     }
     Ok(())
 }

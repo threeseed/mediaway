@@ -128,6 +128,70 @@ fn predict_chroma_8x8_rejects_plane_without_corner() {
     );
 }
 
+/// Per-pixel spec formula (§ 8.3.3.4 / § 8.3.4.4) as an oracle for the row-incremental
+/// `plane_fill`. `k` is the centring offset (7 luma, 3 chroma).
+#[allow(clippy::many_single_char_names, reason = "spec variable names")]
+fn reference_plane(n: i32, k: i32, a: i32, b: i32, c: i32) -> Vec<u8> {
+    let mut out = Vec::new();
+    for y in 0..n {
+        for x in 0..n {
+            out.push(((a + b * (x - k) + c * (y - k) + 16) >> 5).clamp(0, 255) as u8);
+        }
+    }
+    out
+}
+
+#[test]
+fn plane_fill_is_bit_exact_with_per_pixel_formula() {
+    let mut seed = 0x1234_5678_u32;
+    for _ in 0..5_000 {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        let a = i32::try_from(seed % 8161).unwrap(); // 16 * (255 + 255) + 1
+        let b = i32::try_from((seed >> 13) % 600).unwrap() - 300;
+        let c = i32::try_from((seed >> 3) % 600).unwrap() - 300;
+        assert_eq!(
+            plane_fill::<16, 256>(a + 16 - 7 * b - 7 * c, b, c).to_vec(),
+            reference_plane(16, 7, a, b, c)
+        );
+        assert_eq!(
+            plane_fill::<8, 64>(a + 16 - 3 * b - 3 * c, b, c).to_vec(),
+            reference_plane(8, 3, a, b, c)
+        );
+    }
+}
+
+#[test]
+fn predict_16x16_plane_of_gradient_matches_hand_computed_corners() {
+    let mut top = [0u8; 16];
+    let mut left = [0u8; 16];
+    for i in 0..16 {
+        top[i] = (i * 8) as u8;
+        left[i] = (i * 4) as u8;
+    }
+    // H = sum_{x'=0..6} (x'+1) * 16(x'+1) + 8 * (t[15] - corner) = 16 * 140 + 960 = 3200
+    // -> b = (5*3200+32)>>6 = 250; V = 1600 -> c = 125; a = 16*(60+120) = 2880.
+    let out = predict_16x16(3, Some(&top), Some(&left), Some(0)).unwrap();
+    assert_eq!(out.to_vec(), reference_plane(16, 7, 2880, 250, 125));
+    // Spot-check corners by hand: (2880 - 7*250 - 7*125 + 16) >> 5 = 8, and
+    // (2880 + 8*250 + 8*125 + 16) >> 5 = 184.
+    assert_eq!(out[0], 8);
+    assert_eq!(out[255], 184);
+}
+
+#[test]
+fn predict_chroma_8x8_dc_with_only_left_fills_quadrants() {
+    let left = [10, 10, 10, 10, 30, 30, 30, 30];
+    let out = predict_chroma_8x8(0, None, Some(&left), None).unwrap();
+    for y in 0..8 {
+        for x in 0..8 {
+            let expect = if y < 4 { 10 } else { 30 };
+            assert_eq!(out[y * 8 + x], expect, "({x},{y})");
+        }
+    }
+}
+
 #[test]
 fn predict_chroma_8x8_rejects_invalid_mode() {
     assert_eq!(
