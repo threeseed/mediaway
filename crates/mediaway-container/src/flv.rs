@@ -380,11 +380,10 @@ impl Demuxer {
         let avc_packet_type = rest[0];
         // Sign-extend the 24-bit big-endian CompositionTime field.
         let composition_time_ms = i32::from_be_bytes([0, rest[1], rest[2], rest[3]]) << 8 >> 8;
-        let nalus = &rest[4..];
 
         match avc_packet_type {
             0 => {
-                self.video_extra = Some(Bytes::copy_from_slice(nalus));
+                self.video_extra = Some(tag.data.slice(1 + 4..)); // == nalus, no copy
                 self.sync_video_stream();
                 None
             }
@@ -398,7 +397,7 @@ impl Demuxer {
                     duration: 0,
                     is_keyframe: frame_type == 1,
                     is_discard: false,
-                    payload: Bytes::copy_from_slice(nalus),
+                    payload: tag.data.slice(1 + 4..), // == nalus, no copy
                 })
             }
             _ => None, // AVC end-of-sequence marker — no payload
@@ -421,14 +420,14 @@ impl Demuxer {
                     duration: 0,
                     is_keyframe: true,
                     is_discard: false,
-                    payload: Bytes::copy_from_slice(rest),
+                    payload: tag.data.slice(1..), // == rest, no copy
                 })
             }
             10 => {
-                let (&aac_packet_type, aac) = rest.split_first()?;
+                let &aac_packet_type = rest.first()?;
                 match aac_packet_type {
                     0 => {
-                        self.audio_extra = Some(Bytes::copy_from_slice(aac));
+                        self.audio_extra = Some(tag.data.slice(2..)); // == aac, no copy
                         self.sync_audio_stream(CodecKind::Aac);
                         None
                     }
@@ -441,7 +440,7 @@ impl Demuxer {
                             duration: 0,
                             is_keyframe: true,
                             is_discard: false,
-                            payload: Bytes::copy_from_slice(aac),
+                            payload: tag.data.slice(2..), // == aac, no copy
                         })
                     }
                     _ => None,
