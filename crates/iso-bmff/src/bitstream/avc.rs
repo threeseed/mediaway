@@ -19,6 +19,10 @@ pub struct AvccOut {
 }
 
 /// Convert Annex-B to 4-byte length-prefixed AVCC, or pass through.
+///
+/// **Cost:** the pass-through (already length-prefixed) case copies `data` into a fresh
+/// [`Bytes`] because only a borrow is given. Callers that already hold a [`Bytes`] should use
+/// [`to_avcc_bytes`], which returns that buffer without copying.
 #[must_use]
 pub fn to_avcc(data: &[u8]) -> AvccOut {
     if !is_annex_b(data) {
@@ -27,7 +31,25 @@ pub fn to_avcc(data: &[u8]) -> AvccOut {
             avcc: None,
         };
     }
+    annex_b_to_avcc(data)
+}
 
+/// [`to_avcc`] for an owned [`Bytes`] — no copy when already length-prefixed.
+///
+/// An already length-prefixed payload is returned as the same buffer (refcount move). Annex-B input is rewritten into a new buffer (the
+/// start codes become length prefixes, which changes the byte layout — that copy is inherent).
+#[must_use]
+pub fn to_avcc_bytes(data: Bytes) -> AvccOut {
+    if !is_annex_b(&data) {
+        return AvccOut {
+            payload: data,
+            avcc: None,
+        };
+    }
+    annex_b_to_avcc(&data)
+}
+
+fn annex_b_to_avcc(data: &[u8]) -> AvccOut {
     let mut out = Vec::with_capacity(data.len());
     let mut sps: Option<&[u8]> = None;
     let mut pps: Option<&[u8]> = None;

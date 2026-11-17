@@ -10,6 +10,13 @@
 ### Changed
 
 - Fewer copies and allocations on mux/packetize hot paths with byte-identical output: MPEG-TS PES packetization no longer concatenates header + access unit, WebM blocks/clusters no longer stage a per-element body buffer, RTP `packetize` uses one shared allocation per NAL instead of one per fragment, and FLV demux payloads slice the tag buffer instead of copying
+- `iso-bmff`: seekable demux mode (`Demuxer::new_seekable` + `poll_seek`) that reads moov-at-end MP4 by offset without buffering `mdat`; `mediaway-container::mp4::SeekDemuxer` drives it over any `Read + Seek`
+- `iso-bmff`: faststart `moov` relocation (`isobmff::faststart`, `plan_faststart`, `relocate_moov`) with `stco`→`co64` widening; `mediaway-container::mp4::faststart` streams a `Read + Seek` source to a `Write`
+- `iso-bmff`: `bitstream::to_avcc_bytes` / `to_hvcc_bytes` return an already length-prefixed `Bytes` without copying
+
+### Changed
+
+- `iso-bmff` MP4 demuxer emits sample payloads as zero-copy `Bytes` slices of its input (no per-sample copy, no buffer compaction); only CENC-decrypted samples are copied
 
 ## What's new
 

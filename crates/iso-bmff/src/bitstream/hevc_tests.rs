@@ -312,3 +312,12 @@ fn with_parameter_sets_without_a_header_changes_nothing() {
     let idr = annex_b_of(&[&[0x26, 0x01, 0xaf]]);
     assert_eq!(with_parameter_sets(&idr, &[]), None);
 }
+
+#[test]
+fn to_hvcc_bytes_passes_length_prefixed_through_without_copy() {
+    let input = bytes::Bytes::from_static(&[0, 0, 0, 3, 0x26, 0x01, 0xaf]);
+    let ptr = input.as_ptr();
+    let out = super::to_hvcc_bytes(input);
+    assert_eq!(out.payload.as_ptr(), ptr, "same buffer, no copy");
+    assert!(out.hvcc.is_none());
+}
