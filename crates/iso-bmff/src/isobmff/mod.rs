@@ -5,6 +5,7 @@
 pub mod buf;
 pub mod cenc_box;
 pub mod elst;
+pub mod faststart;
 pub mod fourcc;
 pub mod fragment;
 pub mod ftyp;
@@ -17,6 +18,7 @@ pub mod stbl;
 pub use buf::ByteSource;
 pub use cenc_box::{SencSample, TrackEncryption, parse_senc, parse_tenc};
 pub use elst::{EditListEntry, expand_samples_by_edit_list, parse_edts, parse_elst};
+pub use faststart::{FaststartPlan, TopLevelBox, faststart, plan_faststart, relocate_moov};
 pub use fourcc::{FourCc, tag};
 pub use fragment::{MoofInfo, TrunSample, parse_moof, write_fragment};
 pub use ftyp::write_ftyp;

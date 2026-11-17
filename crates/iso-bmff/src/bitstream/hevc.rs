@@ -19,6 +19,9 @@ pub struct HvccOut {
 }
 
 /// Convert Annex-B to 4-byte length-prefixed `hvcC` framing, or pass through.
+///
+/// **Cost:** the pass-through case copies `data` (only a borrow is given). Callers holding a
+/// [`Bytes`] should use [`to_hvcc_bytes`], which returns that buffer without copying.
 #[must_use]
 pub fn to_hvcc(data: &[u8]) -> HvccOut {
     if !is_annex_b(data) {
@@ -27,7 +30,23 @@ pub fn to_hvcc(data: &[u8]) -> HvccOut {
             hvcc: None,
         };
     }
+    annex_b_to_hvcc(data)
+}
 
+/// [`to_hvcc`] for an owned [`Bytes`]: an already length-prefixed payload is returned as the
+/// same buffer (**no copy**). Annex-B input is rewritten into a new buffer (inherent).
+#[must_use]
+pub fn to_hvcc_bytes(data: Bytes) -> HvccOut {
+    if !is_annex_b(&data) {
+        return HvccOut {
+            payload: data,
+            hvcc: None,
+        };
+    }
+    annex_b_to_hvcc(&data)
+}
+
+fn annex_b_to_hvcc(data: &[u8]) -> HvccOut {
     let mut out = Vec::with_capacity(data.len());
     let mut vps: Option<&[u8]> = None;
     let mut sps: Option<&[u8]> = None;

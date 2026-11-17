@@ -11,3 +11,5 @@
 | [0007](0007-mux-payload-placements.md) | Opt-in mux payload placements: absolute output offset + length of every sample written |
 | [0008](0008-progressive-mp4-head.md) | A non-fragmented MP4 head with edit lists (`write_progressive`): FFmpeg applies an `elst` to sample tables only, not to fragmented MP4 |
 | [0009](0009-indexed-moov-for-existing-samples.md) | A `moov` with sample tables for samples already in a file (`write_indexed_moov`): the second half of a hybrid MP4; FFmpeg needs the fragments inside an `mdat` |
+| [0010](0010-zero-copy-seekable-demux.md) | Zero-copy demux payloads (`BytesMut` split/freeze) and a sans-io seek request (`new_seekable` / `poll_seek`) for moov-at-end files |
+| [0011](0011-faststart-moov-relocation.md) | Faststart: relocate a trailing `moov` before the first `mdat`, rewriting `stco`/`co64` (widening past 4 GiB) |

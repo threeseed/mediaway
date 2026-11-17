@@ -5,7 +5,7 @@
 #[cfg(feature = "audio")]
 use crate::bitstream::strip_adts;
 #[cfg(feature = "video")]
-use crate::bitstream::{to_avcc, to_hvcc};
+use crate::bitstream::{to_avcc_bytes, to_hvcc_bytes};
 use crate::codec_features::check_codec;
 use crate::error::Error;
 use crate::isobmff::{write_fragment, write_ftyp, write_moov};
@@ -228,12 +228,14 @@ impl Muxer<Live> {
         let (payload, extra) = match track_codec {
             #[cfg(feature = "video")]
             Codec::H264 => {
-                let o = to_avcc(&sample.payload);
+                // clone: Arc share — an AVCC payload passes through as the same buffer
+                let o = to_avcc_bytes(sample.payload.clone());
                 (o.payload, o.avcc)
             }
             #[cfg(feature = "video")]
             Codec::Hevc => {
-                let o = to_hvcc(&sample.payload);
+                // clone: Arc share — an `hvcC`-framed payload passes through as the same buffer
+                let o = to_hvcc_bytes(sample.payload.clone());
                 (o.payload, o.hvcc)
             }
             #[cfg(feature = "audio")]

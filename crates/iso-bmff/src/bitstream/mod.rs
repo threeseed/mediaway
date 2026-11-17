@@ -19,10 +19,10 @@ pub use av1::{Av1cOut, to_av1c};
 pub use avc::{
     AvcDecoderConfig, AvccOut, SpsCrop, SpsGeometry, annex_b_replacing_sps,
     annex_b_sequence_header, avcc_payload_to_annex_b, parse_avc_decoder_config, parse_sps_geometry,
-    sps_with_crop, to_avcc,
+    sps_with_crop, to_avcc, to_avcc_bytes,
 };
 #[cfg(feature = "video")]
-pub use hevc::{HevcDecoderConfig, HvccOut, parse_hevc_decoder_config, to_hvcc};
+pub use hevc::{HevcDecoderConfig, HvccOut, parse_hevc_decoder_config, to_hvcc, to_hvcc_bytes};
 
 /// True when `data` is exactly a run of length-prefixed NAL units (AVCC / `hvcC` framing).
 ///

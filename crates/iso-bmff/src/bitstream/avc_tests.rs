@@ -150,3 +150,22 @@ fn shorter_length_fields_are_read_too() {
     assert!(crate::bitstream::is_length_prefixed(&[2, 0x65, 0x88], 1));
     assert!(crate::bitstream::is_length_prefixed(&[0, 2, 0x65, 0x88], 2));
 }
+
+#[test]
+fn to_avcc_bytes_passes_length_prefixed_through_without_copy() {
+    let input = bytes::Bytes::from(length_prefixed(&[&[0x65; 40]]));
+    let ptr = input.as_ptr();
+    let out = super::to_avcc_bytes(input);
+    assert_eq!(out.payload.as_ptr(), ptr, "same buffer, no copy");
+    assert!(out.avcc.is_none());
+}
+
+#[test]
+fn to_avcc_bytes_matches_to_avcc_for_annex_b() {
+    let annex = [
+        0u8, 0, 0, 1, 0x67, 0x42, 0x00, 0x1e, 0xaa, 0, 0, 0, 1, 0x68, 0xce, 0, 0, 0, 1, 0x65, 0x88,
+    ];
+    let a = super::to_avcc(&annex);
+    let b = super::to_avcc_bytes(bytes::Bytes::copy_from_slice(&annex));
+    assert_eq!(a, b);
+}
