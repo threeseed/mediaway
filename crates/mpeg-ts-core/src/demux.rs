@@ -33,6 +33,9 @@ struct PesAccumulator {
 #[derive(Debug, Default)]
 pub struct Demuxer {
     buf: Vec<u8>,
+    /// Read offset into `buf`; consumed bytes are compacted lazily in
+    /// [`Demuxer::push_bytes`] so draining stays linear in input size.
+    pos: usize,
     pmt_pid: Option<u16>,
     streams: SmallVec<[ElementaryStream; 4]>,
     accumulators: HashMap<u16, PesAccumulator>,
@@ -48,6 +51,10 @@ impl Demuxer {
 
     /// Append incoming bytes (need not be 188-byte aligned across calls).
     pub fn push_bytes(&mut self, data: &[u8]) {
+        if self.pos > 0 {
+            self.buf.drain(..self.pos);
+            self.pos = 0;
+        }
         self.buf.extend_from_slice(data);
     }
 
@@ -92,11 +99,13 @@ impl Demuxer {
     }
 
     fn consume_one_packet(&mut self) -> Result<bool, Error> {
-        if self.buf.len() < PACKET_LEN {
+        let Some(src) = self.buf.get(self.pos..self.pos + PACKET_LEN) else {
             return Ok(false);
-        }
-        let packet_owned = self.buf[..PACKET_LEN].to_vec();
-        let parsed = parse_ts_packet(&packet_owned)?;
+        };
+        // Stack copy (188 bytes) so `feed_pes` can borrow `self` mutably.
+        let mut packet = [0u8; PACKET_LEN];
+        packet.copy_from_slice(src);
+        let parsed = parse_ts_packet(&packet)?;
         let pid = parsed.pid;
 
         if pid == PAT_PID {
@@ -113,7 +122,7 @@ impl Demuxer {
             self.feed_pes(pid, parsed.pusi, parsed.random_access, parsed.payload)?;
         }
 
-        self.buf.drain(0..PACKET_LEN);
+        self.pos += PACKET_LEN;
         Ok(true)
     }
 
