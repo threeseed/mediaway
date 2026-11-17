@@ -82,6 +82,7 @@ fn d3d12_native_av1_encode_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {

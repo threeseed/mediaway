@@ -128,3 +128,16 @@ fn finish_works_through_a_boxed_encoder() {
     }
     assert_eq!(encoder.finish().unwrap().len(), 3);
 }
+
+#[test]
+fn constructors_leave_in_flight_unset() {
+    let tb = Rational::new(1, 30);
+    for cfg in [
+        super::VideoEncoderConfig::h264(64, 64, tb),
+        super::VideoEncoderConfig::hevc(64, 64, tb),
+        super::VideoEncoderConfig::av1(64, 64, tb),
+        super::VideoEncoderConfig::vp9(64, 64, tb),
+    ] {
+        assert_eq!(cfg.in_flight, None);
+    }
+}

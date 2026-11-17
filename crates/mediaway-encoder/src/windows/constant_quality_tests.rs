@@ -27,6 +27,7 @@ fn encoded_size(quality: Option<u8>) -> Option<usize> {
         gop_size: 30,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let opened = quality.map_or_else(
         || WindowsVideoEncoder::open(&cfg),

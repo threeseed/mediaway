@@ -26,19 +26,21 @@ use std::rc::Rc;
 
 use crate::{EncodeError, VideoEncoder, VideoEncoderConfig, VideoInputPreference};
 use mediaway_common::{
-    Bytes, CodecKind, Packet, PixelFormat, StreamInfo, VideoFrame, VideoFrameStorage, VideoGeometry,
+    Bytes, CodecKind, GpuBufferHandle, Packet, PixelFormat, StreamInfo, VideoFrame,
+    VideoFrameStorage, VideoGeometry,
 };
 
 use cros_libva::{
     BufferType, Config, Context, Display, EncPictureParameter, EncSequenceParameter,
     EncSliceParameter, HEVCEncPicFields, HEVCEncSeqFields, HevcEncPicSccFields,
     HevcEncSeqSccFields, HevcEncSliceFields, MappedCodedBuffer, Picture, PictureHEVC, Surface,
-    UsageHint, VA_FOURCC_NV12, VA_INVALID_SURFACE, VA_PICTURE_HEVC_INVALID,
-    VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE, VA_RC_CQP, VA_RT_FORMAT_YUV420, VAConfigAttrib,
-    VAConfigAttribType, VAEntrypoint,
+    SurfaceMemoryDescriptor, UsageHint, VA_FOURCC_NV12, VA_INVALID_SURFACE,
+    VA_PICTURE_HEVC_INVALID, VA_PICTURE_HEVC_RPS_ST_CURR_BEFORE, VA_RC_CQP, VA_RT_FORMAT_YUV420,
+    VAConfigAttrib, VAConfigAttribType, VAEntrypoint,
 };
 
 use super::codec::video_profile;
+use super::dmabuf;
 use super::hevc_gop::{DpbSlot, FrameDecision, FrameRequest, GopState};
 
 /// Number of driver surfaces kept in rotation — aliases [`super::gop::WORKSPACE_DPB_CAP`], same
@@ -95,6 +97,9 @@ pub(crate) struct VaapiHevcVideoEncoder {
     height: u32,
     nv12_bytes: usize,
     bits_per_second: u32,
+    /// Caller's requested input mode, fixed at `open()` — mirrors the H.264 sibling's field
+    /// (ADR-0006: frame storage provenance must match it).
+    input: VideoInputPreference,
     surfaces: Vec<Option<Surface<()>>>,
     /// GOP decision state (ADR-0003) — see [`super::hevc_gop`].
     gop: GopState,
@@ -117,8 +122,9 @@ impl VaapiHevcVideoEncoder {
     pub(crate) fn open(config: &VideoEncoderConfig) -> Result<Self, EncodeError> {
         validate(config)?;
         match config.input {
-            VideoInputPreference::CpuUploadOk => Self::open_cpu(config),
-            _ => Err(EncodeError::Unsupported),
+            VideoInputPreference::CpuUploadOk | VideoInputPreference::ZeroCopyGpu => {
+                Self::open_cpu(config)
+            }
         }
     }
 
@@ -133,7 +139,12 @@ impl VaapiHevcVideoEncoder {
         // that function is already parameterized by `profile`, so no HEVC-specific copy is
         // needed (see module doc).
         let supports_p_frames = super::video::probe_supports_p_frames(&display, profile);
-        let effective_gop_size = if config.gop_size > 1 && supports_p_frames {
+        // ZeroCopyGpu (DMA-BUF import, ADR-0006) surfaces are single-use and never kept as a
+        // reference, so that mode forces all-IDR — same contract as the H.264 sibling.
+        let effective_gop_size = if config.gop_size > 1
+            && supports_p_frames
+            && config.input != VideoInputPreference::ZeroCopyGpu
+        {
             config.gop_size
         } else {
             1
@@ -178,6 +189,7 @@ impl VaapiHevcVideoEncoder {
             height: config.height,
             nv12_bytes,
             bits_per_second: config.bitrate_bps,
+            input: config.input,
             surfaces: surfaces.into_iter().map(Some).collect(),
             gop: GopState::new(effective_gop_size),
             effective_gop_size,
@@ -191,13 +203,13 @@ impl VaapiHevcVideoEncoder {
     /// `(VASurfaceID, DpbSlot)` as `ReferenceFrames[0]`/`RefPicList0[0]` when this is a P frame.
     /// Mirrors [`super::video::VaapiVideoEncoder::encode_one`]'s shape and lost-surface
     /// disposition (see that method's doc comment for the full rationale).
-    fn encode_one(
+    fn encode_one<D: SurfaceMemoryDescriptor>(
         &self,
-        surface: Surface<()>,
+        surface: Surface<D>,
         frame: &VideoFrame,
         decision: &FrameDecision,
         reference: Option<(cros_libva::VASurfaceID, DpbSlot)>,
-    ) -> (Option<Surface<()>>, Result<Packet, EncodeError>) {
+    ) -> (Option<Surface<D>>, Result<Packet, EncodeError>) {
         let Ok(pic_width) = u16::try_from(self.width) else {
             return (Some(surface), Err(EncodeError::InvalidInput));
         };
@@ -255,14 +267,14 @@ impl VaapiHevcVideoEncoder {
         };
 
         let timestamp = u64::try_from(frame.pts).unwrap_or(0);
-        let mut picture = Picture::new::<()>(timestamp, Rc::clone(&self.context), surface);
+        let mut picture = Picture::new::<D>(timestamp, Rc::clone(&self.context), surface);
         if let Some(seq_buf) = seq_buf {
             picture.add_buffer(seq_buf);
         }
         picture.add_buffer(pic_buf);
         picture.add_buffer(slice_buf);
 
-        let Ok(picture) = picture.begin::<()>() else {
+        let Ok(picture) = picture.begin::<D>() else {
             return (None, Err(EncodeError::Backend));
         };
         let Ok(picture) = picture.render() else {
@@ -271,7 +283,7 @@ impl VaapiHevcVideoEncoder {
         let Ok(picture) = picture.end() else {
             return (None, Err(EncodeError::Backend));
         };
-        let Ok(picture) = picture.sync::<()>() else {
+        let Ok(picture) = picture.sync::<D>() else {
             return (None, Err(EncodeError::Backend));
         };
 
@@ -298,6 +310,31 @@ impl VaapiHevcVideoEncoder {
         };
         (surface, Ok(packet))
     }
+
+    /// Zero-Copy DMA-BUF import path (`VideoInputPreference::ZeroCopyGpu`, ADR-0006) — imports
+    /// `desc` as a single-use VA-API surface via the codec-agnostic [`super::dmabuf`] module and
+    /// encodes it with no CPU upload. `open_cpu` forces all-IDR for this mode, so
+    /// `decision.reference` is always `None`; the imported surface is dropped
+    /// (`vaDestroySurfaces`) after `encode_one` returns and never enters `self.surfaces`.
+    ///
+    /// Cost: one `vaCreateSurfaces` import + destroy per frame (no pixel copy); every frame is
+    /// an IDR, so bitrate is higher than the CPU-upload P-frame GOP path.
+    fn push_frame_dmabuf(
+        &mut self,
+        frame: &VideoFrame,
+        desc: &mediaway_common::DmaBufDescriptor,
+    ) -> Result<(), EncodeError> {
+        let decision = self.gop.decide(FrameRequest::Auto);
+        if decision.reference.is_some() {
+            return Err(EncodeError::Backend);
+        }
+        let surface =
+            dmabuf::import_surface(self.context.display(), desc, self.width, self.height)?;
+        let (_returned_surface, result) = self.encode_one(surface, frame, &decision, None);
+        let packet = result?;
+        self.pending.push_back(packet);
+        Ok(())
+    }
 }
 
 impl VideoEncoder for VaapiHevcVideoEncoder {
@@ -309,12 +346,19 @@ impl VideoEncoder for VaapiHevcVideoEncoder {
         if self.flushed {
             return Err(EncodeError::Closed);
         }
-        let VideoFrameStorage::Cpu { data } = &frame.storage else {
-            return Err(EncodeError::Unsupported);
-        };
         if frame.width != self.width || frame.height != self.height {
             return Err(EncodeError::InvalidInput);
         }
+        // ADR-0006: storage must match `open()`'s `VideoInputPreference`; never a silent
+        // fallback to the other path.
+        let data = match (self.input, &frame.storage) {
+            (VideoInputPreference::CpuUploadOk, VideoFrameStorage::Cpu { data }) => data,
+            (
+                VideoInputPreference::ZeroCopyGpu,
+                VideoFrameStorage::Gpu(GpuBufferHandle::DmaBuf(desc)),
+            ) => return self.push_frame_dmabuf(frame, desc),
+            _ => return Err(EncodeError::InvalidInput),
+        };
         if data.len() < self.nv12_bytes {
             return Err(EncodeError::InvalidInput);
         }

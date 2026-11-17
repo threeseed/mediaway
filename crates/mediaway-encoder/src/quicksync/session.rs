@@ -130,7 +130,12 @@ impl QuickSyncSession {
             codec_level,
         );
         let mut params = mfxVideoParam {
-            AsyncDepth: 1,
+            // `VideoEncoderConfig::in_flight` (ADR-0007): oneVPL's internal pipelining depth.
+            // Default 1 (unchanged). This session still syncs each frame before `push_frame`
+            // returns, so a larger depth only lets the runtime overlap its own internal stages.
+            AsyncDepth: config
+                .in_flight
+                .map_or(1, |n| u16::try_from(n.get()).unwrap_or(u16::MAX)),
             __bindgen_anon_1: mfxVideoParam__bindgen_ty_1 { mfx },
             IOPattern: MFX_IOPATTERN_IN_SYSTEM_MEMORY,
             ..Default::default()

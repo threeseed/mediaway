@@ -49,6 +49,7 @@ fn encode_cpu_then_decode_cpu_round_trip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut encoder = match WindowsVideoEncoder::open(&enc_cfg) {
         Ok(e) => e,

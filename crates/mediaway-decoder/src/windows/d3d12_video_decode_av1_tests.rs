@@ -195,6 +195,7 @@ fn av1_decode_key_frames_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut encoder = match WindowsVideoEncoder::open(&enc_cfg) {
         Ok(e) => e,

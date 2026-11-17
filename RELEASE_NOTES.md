@@ -17,6 +17,18 @@
 ### Changed
 
 - `iso-bmff` MP4 demuxer emits sample payloads as zero-copy `Bytes` slices of its input (no per-sample copy, no buffer compaction); only CENC-decrypted samples are copied
+- `VideoEncoderConfig::in_flight` pipelining-depth request, honored by VideoToolbox (`MaxFrameDelayCount`) and oneVPL QuickSync (`AsyncDepth`); other backends ignore it (not hardware-tested)
+- VA-API HEVC encode accepts DMA-BUF surfaces (`VideoInputPreference::ZeroCopyGpu`, all-IDR in that mode), like the H.264 backend (not hardware-tested)
+- `D3d12SharedEncodeBridge` creates a shared D3D12/D3D11 fence when supported (`d3d12_fence_handle`, `begin_d3d12_write`, `end_d3d12_write`)
+
+### Changed
+
+- `mediaway::wgpu::WgpuDx12Bridge::copy_frame` orders the copy against the encoder with a GPU fence instead of a per-frame CPU wait when the shared fence is available; falls back to the CPU wait otherwise (not hardware-tested)
+- WebCodecs video decode luma readback no longer copies the whole frame into a temporary buffer
+
+### Breaking
+
+- `VideoEncoderConfig` gained the `in_flight` field; struct literals must add `in_flight: None` (the `h264`/`hevc`/`av1`/`vp9` constructors are unaffected)
 
 ## What's new
 

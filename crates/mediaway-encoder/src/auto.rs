@@ -191,6 +191,7 @@ impl AutoVideoEncodeConfig {
             gop_size: self.gop_size,
             rate_control: self.rate_control,
             intra_refresh_period: None,
+            in_flight: None,
         }
     }
 }

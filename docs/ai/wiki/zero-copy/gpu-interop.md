@@ -8,7 +8,7 @@ Canonical: [`docs/spec/gpu-interop.md`](../../../spec/gpu-interop.md) · ADR-000
   contract) to recover the native `ID3D12Device`/`ID3D12Resource` `wgpu`'s
   DX12 backend holds, then bridges into `mediaway-encoder::windows`'s existing
   `D3d12SharedEncodeBridge` (D3D12 shared heap → native D3D11 → WMF).
-  `copy_frame`: **`GpuCopy`**, one GPU→GPU copy + CPU↔GPU sync stall/frame
+  `copy_frame`: **`GpuCopy`**, one GPU→GPU copy/frame; GPU-fenced, CPU stall only as fallback ([sync-and-depth](sync-and-depth.md))
   (`wgpu` has no D3D11 backend, WMF rejects `D3D11On12`). **`render_target`
   + `handle` (2026-08-20): genuine `ZeroCopy`** — render directly into the
   bridge's own shared texture (now `RENDER_ATTACHMENT`-capable) instead of

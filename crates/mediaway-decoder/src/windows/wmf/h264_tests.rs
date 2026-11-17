@@ -62,6 +62,7 @@ fn a_size_that_is_not_a_multiple_of_16_decodes_every_frame_on_the_cpu() {
         gop_size: 30,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     }) {
         Ok(encoder) => encoder,
         Err(e) => {
@@ -214,6 +215,7 @@ fn a_crop_at_an_offset_still_decodes_the_whole_coded_picture_on_the_cpu() {
         gop_size: 30,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     }) {
         Ok(encoder) => encoder,
         Err(e) => {
