@@ -188,16 +188,30 @@ async fn read_luma_plane(frame: &VideoFrame, width: u32, height: u32) -> Result<
     let luma_layout: PlaneLayout = layouts.get(0);
     let stride = luma_layout.get_stride() as usize;
     let offset = luma_layout.get_offset() as usize;
-    let raw = readback.to_vec();
+    // Copy each luma row straight from the JS-side `copyTo` buffer into the final owned
+    // buffer (`subarray` is a view, not a copy). Earlier code first materialised the whole
+    // `allocationSize` buffer (luma + chroma + padding) into a temporary `Vec` via
+    // `to_vec()` and then copied luma rows again; this is one JS->wasm copy of luma bytes
+    // only. Remaining cost (honest): `copyTo` itself is a decoder->JS-heap readback of every
+    // plane. A `&mut [u8]` wasm-memory target is not used because the buffer must stay
+    // valid until the `copyTo` promise resolves, which wasm-bindgen's slice glue does not
+    // guarantee.
     let (width, height) = (width as usize, height as usize);
+    let total = readback.length() as usize;
     let mut luma = vec![0u8; width * height];
-    for row in 0..height {
+    for (row, dst) in luma.chunks_exact_mut(width.max(1)).take(height).enumerate() {
         let row_start = offset + row * stride;
-        let out_start = row * width;
-        luma[out_start..out_start + width].copy_from_slice(
-            raw.get(row_start..row_start + width)
-                .ok_or_else(|| JsValue::from_str("copyTo buffer too small for stride"))?,
-        );
+        let row_end = row_start + width;
+        if row_end > total {
+            return Err(JsValue::from_str("copyTo buffer too small for stride"));
+        }
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "row_end <= readback.length(), which is a u32"
+        )]
+        readback
+            .subarray(row_start as u32, row_end as u32)
+            .copy_to(dst);
     }
     Ok(luma)
 }

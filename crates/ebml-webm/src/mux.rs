@@ -47,6 +47,10 @@ pub struct Muxer<S = Open> {
     output_consumed: usize,
     /// Buffered `SimpleBlock` element bytes for the still-open `Cluster`.
     cluster: Vec<u8>,
+    /// Reused scratch for small element headers (`SimpleBlock` header bytes,
+    /// the `Cluster`'s `Timecode` element) so payload bytes are copied once,
+    /// straight into `cluster`/`output`, with no per-block body `Vec`.
+    scratch: Vec<u8>,
     /// Absolute timecode of the open `Cluster`'s first frame, if any.
     cluster_timecode: Option<i64>,
     cluster_frames: usize,
@@ -71,6 +75,7 @@ impl Muxer<Open> {
             output: Vec::with_capacity(4 * 1024),
             output_consumed: 0,
             cluster: Vec::new(),
+            scratch: Vec::new(),
             cluster_timecode: None,
             cluster_frames: 0,
             batch: batch.max(1),
@@ -120,6 +125,7 @@ impl Muxer<Open> {
             output: self.output,
             output_consumed: self.output_consumed,
             cluster: self.cluster,
+            scratch: self.scratch,
             cluster_timecode: self.cluster_timecode,
             cluster_frames: self.cluster_frames,
             batch: self.batch,
@@ -171,6 +177,7 @@ impl Muxer<Live> {
         let relative_timecode = self.open_cluster_for(track_number, timecode)?;
         write_simple_block(
             &mut self.cluster,
+            &mut self.scratch,
             track_number,
             relative_timecode,
             is_keyframe,
@@ -208,6 +215,7 @@ impl Muxer<Live> {
         if let [payload] = payloads {
             write_simple_block(
                 &mut self.cluster,
+                &mut self.scratch,
                 track_number,
                 relative_timecode,
                 is_keyframe,
@@ -216,6 +224,7 @@ impl Muxer<Live> {
         } else {
             write_laced_simple_block(
                 &mut self.cluster,
+                &mut self.scratch,
                 track_number,
                 relative_timecode,
                 is_keyframe,
@@ -281,12 +290,14 @@ impl Muxer<Live> {
             return;
         }
         let base = self.cluster_timecode.unwrap_or(0);
-        let mut body = Vec::with_capacity(self.cluster.len() + 16);
-        write_uint_elem(&mut body, ids::TIMECODE, base.max(0) as u64);
-        body.extend_from_slice(&self.cluster);
+        self.scratch.clear();
+        write_uint_elem(&mut self.scratch, ids::TIMECODE, base.max(0) as u64);
+        let body_len = self.scratch.len() + self.cluster.len();
+        self.output.reserve(body_len + 12);
         write_id(&mut self.output, ids::CLUSTER);
-        vint::encode_size(body.len() as u64, &mut self.output);
-        self.output.extend_from_slice(&body);
+        vint::encode_size(body_len as u64, &mut self.output);
+        self.output.extend_from_slice(&self.scratch);
+        self.output.extend_from_slice(&self.cluster);
         self.cluster.clear();
         self.cluster_timecode = None;
         self.cluster_frames = 0;
@@ -364,21 +375,40 @@ fn write_track_entry(out: &mut Vec<u8>, t: &TrackInfo) {
 /// same convention [`crate::demux`]'s `parse_block_common` reads), 2-byte
 /// signed relative timecode, 1 flags byte (`0x80` keyframe, no lacing bits
 /// set — this muxer never lacs), then the raw payload.
+///
+/// `scratch` holds only the few block-header bytes; `payload` is copied once,
+/// directly into `out`.
 fn write_simple_block(
     out: &mut Vec<u8>,
+    scratch: &mut Vec<u8>,
     track_number: u64,
     relative_timecode: i16,
     is_keyframe: bool,
     payload: &[u8],
 ) {
-    let mut body = Vec::with_capacity(payload.len() + 4);
-    vint::encode_size(track_number, &mut body);
-    body.extend_from_slice(&relative_timecode.to_be_bytes());
-    body.push(if is_keyframe { 0x80 } else { 0x00 });
-    body.extend_from_slice(payload);
+    scratch.clear();
+    vint::encode_size(track_number, scratch);
+    scratch.extend_from_slice(&relative_timecode.to_be_bytes());
+    scratch.push(if is_keyframe { 0x80 } else { 0x00 });
+    write_block_element(out, scratch, payload.len(), [payload]);
+}
+
+/// `SimpleBlock` element: id, size (`header + payload_len`), `header`, then
+/// each payload slice — the payload is never staged in a temporary body.
+fn write_block_element<'a>(
+    out: &mut Vec<u8>,
+    header: &[u8],
+    payload_len: usize,
+    payloads: impl IntoIterator<Item = &'a [u8]>,
+) {
+    let body_len = header.len() + payload_len;
+    out.reserve(body_len + 12);
     write_id(out, ids::SIMPLE_BLOCK);
-    vint::encode_size(body.len() as u64, out);
-    out.extend_from_slice(&body);
+    vint::encode_size(body_len as u64, out);
+    out.extend_from_slice(header);
+    for payload in payloads {
+        out.extend_from_slice(payload);
+    }
 }
 
 /// EBML-laced `SimpleBlock` body: track number VINT, 2-byte signed relative
@@ -390,28 +420,23 @@ fn write_simple_block(
 /// checked `2..=MAX_LACED_FRAMES` frames.
 fn write_laced_simple_block(
     out: &mut Vec<u8>,
+    scratch: &mut Vec<u8>,
     track_number: u64,
     relative_timecode: i16,
     is_keyframe: bool,
     payloads: &[&[u8]],
 ) {
     let payload_len: usize = payloads.iter().map(|p| p.len()).sum();
-    let mut body = Vec::with_capacity(payload_len + 8 + payloads.len());
-    vint::encode_size(track_number, &mut body);
-    body.extend_from_slice(&relative_timecode.to_be_bytes());
-    body.push(if is_keyframe { 0x80 } else { 0x00 } | 0x06); // EBML lacing
-    body.push((payloads.len() - 1) as u8);
-    let sizes: Vec<usize> = payloads[..payloads.len() - 1]
-        .iter()
-        .map(|p| p.len())
-        .collect();
-    lacing::encode_ebml_lace_sizes(&sizes, &mut body);
-    for payload in payloads {
-        body.extend_from_slice(payload);
-    }
-    write_id(out, ids::SIMPLE_BLOCK);
-    vint::encode_size(body.len() as u64, out);
-    out.extend_from_slice(&body);
+    scratch.clear();
+    vint::encode_size(track_number, scratch);
+    scratch.extend_from_slice(&relative_timecode.to_be_bytes());
+    scratch.push(if is_keyframe { 0x80 } else { 0x00 } | 0x06); // EBML lacing
+    scratch.push((payloads.len() - 1) as u8);
+    lacing::encode_ebml_lace_sizes(
+        payloads[..payloads.len() - 1].iter().map(|p| p.len()),
+        scratch,
+    );
+    write_block_element(out, scratch, payload_len, payloads.iter().copied());
 }
 
 /// Write a `UInt` master element: `id`, size, then the minimal big-endian

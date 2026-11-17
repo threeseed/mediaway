@@ -16,10 +16,12 @@
 //! (`MF_E_UNSUPPORTED_D3D_TYPE`, see `mediaway-encoder-windows` ADR-0006). So
 //! the same one-copy-per-frame bridge ADR-0006 already ships for native D3D12
 //! apps is the only real bridge available today — [`WgpuDx12Bridge::copy_frame`]
-//! records one GPU→GPU `CopyResource`, then a CPU-side `device.poll(Wait)`
-//! stall (the bridge's shared NT handle carries no cross-device fence yet)
-//! before the caller may push the resulting handle into the encoder. See
-//! [ADR-0001](../adr/0001-dx12-hal-gpucopy-bridge.md).
+//! records one GPU→GPU `CopyResource`, ordered against the D3D11 encoder by a
+//! shared cross-API fence on the GPU when available (no CPU stall), else a
+//! CPU-side `device.poll(Wait)` stall, before the caller may push the
+//! resulting handle into the encoder. See
+//! [ADR-0001](../adr/0001-dx12-hal-gpucopy-bridge.md) and
+//! [ADR-0006](../adr/wgpu/0006-copy-frame-cross-api-fence.md).
 
 #![allow(unsafe_code)]
 
@@ -30,7 +32,7 @@ use mediaway_encoder::EncodeError;
 // now-resolved "windows-rs version straddle" section), so no second,
 // separately-versioned `windows` dependency is needed to name
 // `wgpu_hal::dx12::Device::raw_device`/`texture_from_raw`'s types.
-use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Resource};
+use windows::Win32::Graphics::Direct3D12::{ID3D12Device, ID3D12Fence, ID3D12Resource};
 use windows::core::Interface;
 
 use crate::wgpu::error::WgpuInteropError;
@@ -151,16 +153,29 @@ impl WgpuDx12Bridge {
     }
 
     /// Copy `source` (a caller-owned `wgpu::Texture`, [`BRIDGE_FORMAT`], same
-    /// `width`/`height` as [`Self::new`]) into the bridge's shared texture and
-    /// wait for the GPU copy to complete.
+    /// `width`/`height` as [`Self::new`]) into the bridge's shared texture,
+    /// ordered against the encoder's D3D11 device.
     ///
-    /// **Costly path — `GpuCopy` plus one CPU↔GPU sync stall per frame.** Not
-    /// Zero-Copy: this records `copy_texture_to_texture` on `device`'s own
-    /// queue, submits it, then blocks (`device.poll(PollType::Wait)`) until
-    /// that submission finishes. The stall exists because the bridge's shared
-    /// NT handle carries no cross-device fence — without it, WMF's own
-    /// (different) D3D11 device could race the copy. Returns a
-    /// [`GpuBufferHandle::DirectX11`] ready to push into a
+    /// **Costly path — `GpuCopy` (one GPU→GPU copy per frame).** Not
+    /// Zero-Copy. Synchronisation, in order of preference:
+    ///
+    /// - **Fenced (default when available, no CPU stall):** when the bridge
+    ///   opened a shared cross-API fence
+    ///   ([`mediaway_encoder::windows::D3d12SharedEncodeBridge::d3d12_fence_handle`]),
+    ///   the copy's submission GPU-waits for the encoder's D3D11 work on the
+    ///   previous frame and signals the fence afterwards (staged through
+    ///   `wgpu-hal`'s `Queue::add_wait_fence`/`add_signal_fence`); the D3D11
+    ///   immediate context then GPU-waits for that signal. Remaining costs:
+    ///   one D3D11 `Flush` per frame and the GPU-side waits themselves (the
+    ///   encoder cannot read before the copy lands). **Not hardware-verified;**
+    ///   assumes the WMF MFT reads through the device's immediate context.
+    /// - **Fallback (CPU stall):** without a shared fence, submits then
+    ///   blocks on `device.poll(PollType::Wait)` for that submission, as
+    ///   before.
+    ///
+    /// `queue` must not be submitted to from another thread between this call's
+    /// staging and its submit (the staged wait/signal attach to the *next*
+    /// submit). Returns a [`GpuBufferHandle::DirectX11`] ready to push into a
     /// [`mediaway_common::VideoFrame`] for that same frame.
     ///
     /// # Errors
@@ -204,8 +219,27 @@ impl WgpuDx12Bridge {
             },
             extent,
         );
-        let submission_index = queue.submit(std::iter::once(encoder.finish()));
+        let commands = encoder.finish();
 
+        if let Some(fence) = self.bridge.d3d12_fence_handle()? {
+            let fence = fence_from_handle(fence)?;
+            if let Some(write) = self.bridge.begin_d3d12_write()? {
+                // SAFETY: `as_hal`'s guard is dropped right after staging; staging a
+                // wait/signal on a live shared fence does not destroy or mutate any wgpu-owned
+                // resource.
+                let hal_queue = unsafe { queue.as_hal::<wgpu::hal::api::Dx12>() }
+                    .ok_or(WgpuInteropError::HalUnavailable)?;
+                // clone: COM AddRef — the hal queue keeps its own reference until submit.
+                hal_queue.add_wait_fence(fence.clone(), write.wait_value);
+                hal_queue.add_signal_fence(fence, write.signal_value);
+                drop(hal_queue);
+                queue.submit(std::iter::once(commands));
+                self.bridge.end_d3d12_write(write)?;
+                return Ok(self.bridge.as_dx11_handle()?);
+            }
+        }
+
+        let submission_index = queue.submit(std::iter::once(commands));
         device
             .poll(wgpu::PollType::Wait {
                 submission_index: Some(submission_index),
@@ -255,6 +289,15 @@ impl WgpuDx12Bridge {
 
         Ok(self.bridge.as_dx11_handle()?)
     }
+}
+
+/// Borrow + `AddRef` the bridge's shared `ID3D12Fence*`.
+fn fence_from_handle(handle: NativeHandle) -> Result<ID3D12Fence, WgpuInteropError> {
+    let raw = handle.get() as *mut core::ffi::c_void;
+    // SAFETY: `handle` names the live fence the bridge owns for its whole lifetime.
+    let borrowed =
+        unsafe { ID3D12Fence::from_raw_borrowed(&raw) }.ok_or(WgpuInteropError::InvalidInput)?;
+    Ok(borrowed.clone()) // clone: COM AddRef, the hal queue takes ownership of one reference
 }
 
 /// Extract the native `ID3D12Device*` behind `device` (must be wgpu's DX12

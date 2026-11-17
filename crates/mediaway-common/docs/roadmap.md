@@ -11,6 +11,7 @@ Index: [`docs/roadmap.md`](../../../docs/roadmap.md).
 - [x] `PixelFormat`, `SampleFormat`
 - [x] `GpuBufferHandle` enum (all platform variants declared; impls elsewhere)
 - [x] Shared `Packet` / `VideoFrame` / `AudioFrame` input types used by encoder/decoder/mux
+- [x] `BufferPool` — single-owner CPU byte-buffer pool (ADR-0001); not yet wired into mux/packetize APIs
 
 ### 1 — Windows-ready surface
 

@@ -36,9 +36,10 @@ use objc2_core_video::{
 use objc2_video_toolbox::{
     VTCompressionSession, VTEncodeInfoFlags, VTSessionSetProperty,
     kVTCompressionPropertyKey_AllowFrameReordering, kVTCompressionPropertyKey_AverageBitRate,
-    kVTCompressionPropertyKey_ExpectedFrameRate, kVTCompressionPropertyKey_MaxKeyFrameInterval,
-    kVTCompressionPropertyKey_ProfileLevel, kVTCompressionPropertyKey_RealTime,
-    kVTProfileLevel_H264_Baseline_AutoLevel, kVTProfileLevel_HEVC_Main_AutoLevel,
+    kVTCompressionPropertyKey_ExpectedFrameRate, kVTCompressionPropertyKey_MaxFrameDelayCount,
+    kVTCompressionPropertyKey_MaxKeyFrameInterval, kVTCompressionPropertyKey_ProfileLevel,
+    kVTCompressionPropertyKey_RealTime, kVTProfileLevel_H264_Baseline_AutoLevel,
+    kVTProfileLevel_HEVC_Main_AutoLevel,
 };
 
 use super::codec::codec_type;
@@ -588,6 +589,12 @@ fn configure_properties(
             kVTCompressionPropertyKey_ExpectedFrameRate,
             frame_rate,
         )?;
+        // `VideoEncoderConfig::in_flight` (ADR-0007): cap on frames VideoToolbox may hold
+        // before emitting output. Unset keeps VideoToolbox's own default (unlimited).
+        if let Some(depth) = config.in_flight {
+            let depth = i32::try_from(depth.get()).unwrap_or(i32::MAX);
+            set_i32_property(session, kVTCompressionPropertyKey_MaxFrameDelayCount, depth)?;
+        }
 
         // ProRes: no `ProfileLevel` (zero `kVTProfileLevel_ProRes*` constants exist anywhere in
         // the generated bindings — the profile is fully encoded in `codec_type`'s six distinct

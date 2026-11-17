@@ -12,6 +12,11 @@ use iso_bmff::Muxer as IsoMuxer;
 use iso_bmff::mux::{Live as IsoLive, Open as IsoOpen};
 use mediaway_common::{Packet, StreamInfo};
 
+/// Seekable demux over a `Read + Seek` source (moov-at-end without buffering `mdat`).
+#[cfg(feature = "demux")]
+pub use crate::mp4_io::SeekDemuxer;
+/// `Read + Seek` faststart copy and its I/O error.
+pub use crate::mp4_io::{IoError, faststart};
 /// Default fragment batch size.
 #[cfg(feature = "mux")]
 pub use iso_bmff::DEFAULT_FRAGMENT_BATCH;

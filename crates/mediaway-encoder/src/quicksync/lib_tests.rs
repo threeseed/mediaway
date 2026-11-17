@@ -28,6 +28,7 @@ fn open_rejects_zero_copy_gpu_this_stage() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     // Real oneVPL Zero-Copy D3D11 surfaces are deferred (adr/0001) — every
     // build (with or without a real oneVPL runtime) must reject this input
@@ -59,6 +60,7 @@ fn public_api_real_encode_or_skips() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut encoder = match QuickSyncVideoEncoder::open(&config) {

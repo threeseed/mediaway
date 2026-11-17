@@ -5,25 +5,35 @@
 //! Do **not** use `D3D11On12` for NVENC/MF — that path yields `MF_E_UNSUPPORTED_D3D_TYPE`.
 //!
 //! See [ADR-0006](../adr/0006-d3d12-shared-to-d3d11.md).
+//!
+//! **Cross-API fence (optional, best-effort at open):** when the native D3D11 device exposes
+//! `ID3D11Device5` (Windows 10 1703+), the bridge also creates one `D3D12_FENCE_FLAG_SHARED`
+//! fence opened on both APIs, so a D3D12 producer can order its copy against the D3D11 encoder
+//! on the GPU (see [`D3d12SharedEncodeBridge::begin_d3d12_write`]) instead of a CPU stall.
+//! **Not hardware-verified** — compiled (`cargo check`, `x86_64-pc-windows-msvc`) only.
 
 #![allow(unsafe_code)]
 
 use crate::EncodeError;
 use mediaway_common::{GpuBufferHandle, NativeHandle};
+use std::sync::atomic::{AtomicU64, Ordering};
 use windows::Win32::Foundation::{CloseHandle, GENERIC_ALL, HANDLE, HMODULE};
 use windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE_UNKNOWN;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_0;
 use windows::Win32::Graphics::Direct3D::D3D_FEATURE_LEVEL_11_1;
+
 use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
-    D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11Resource, ID3D11Texture2D,
+    D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11Device5, ID3D11DeviceContext4,
+    ID3D11Fence, ID3D11Resource, ID3D11Texture2D,
 };
 use windows::Win32::Graphics::Direct3D12::{
-    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_HEAP_FLAG_SHARED, D3D12_HEAP_PROPERTIES,
-    D3D12_HEAP_TYPE_DEFAULT, D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_DESC,
+    D3D12_CPU_PAGE_PROPERTY_UNKNOWN, D3D12_FENCE_FLAG_SHARED, D3D12_HEAP_FLAG_SHARED,
+    D3D12_HEAP_PROPERTIES, D3D12_HEAP_TYPE_DEFAULT, D3D12_MEMORY_POOL_UNKNOWN, D3D12_RESOURCE_DESC,
     D3D12_RESOURCE_DIMENSION_TEXTURE2D, D3D12_RESOURCE_FLAG_ALLOW_RENDER_TARGET,
-    D3D12_RESOURCE_STATE_COMMON, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12Device, ID3D12Resource,
+    D3D12_RESOURCE_STATE_COMMON, D3D12_TEXTURE_LAYOUT_UNKNOWN, ID3D12Device, ID3D12Fence,
+    ID3D12Resource,
 };
 use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC};
 use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory2, IDXGIAdapter, IDXGIFactory4};
@@ -35,6 +45,31 @@ pub struct D3d12SharedEncodeBridge {
     d3d11_device: ID3D11Device,
     d3d11_texture: ID3D11Texture2D,
     shared_handle: HANDLE,
+    /// `None` when the D3D11 device lacks `ID3D11Device5` or fence sharing failed —
+    /// callers then fall back to a CPU-side wait.
+    fence: Option<CrossApiFence>,
+}
+
+/// One shared fence opened on both APIs plus the D3D11 immediate context that signals/waits on
+/// it. Values only ever increase; each side waits for the previous value before signalling the
+/// next, so one fence serves both directions (D3D12 write -> D3D11 read -> next D3D12 write).
+struct CrossApiFence {
+    d3d12: ID3D12Fence,
+    d3d11: ID3D11Fence,
+    context: ID3D11DeviceContext4,
+    last: AtomicU64,
+}
+
+/// Fence values for one D3D12-side write of the shared texture, from
+/// [`D3d12SharedEncodeBridge::begin_d3d12_write`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct D3d12WriteFence {
+    /// The D3D12 queue must GPU-wait for this value before writing (D3D11 finished reading the
+    /// previous frame).
+    pub wait_value: u64,
+    /// The D3D12 queue must signal this value after its write; pass it to
+    /// [`D3d12SharedEncodeBridge::end_d3d12_write`].
+    pub signal_value: u64,
 }
 
 impl D3d12SharedEncodeBridge {
@@ -162,13 +197,80 @@ impl D3d12SharedEncodeBridge {
         let opened: ID3D11Resource = unsafe { device1.OpenSharedResource1(shared_handle) }
             .map_err(|_| EncodeError::Backend)?;
         let d3d11_texture: ID3D11Texture2D = opened.cast().map_err(|_| EncodeError::Backend)?;
+        let fence = open_cross_api_fence(d3d12, &d3d11_device);
 
         Ok(Self {
             d3d12_resource: resource,
             d3d11_device,
             d3d11_texture,
             shared_handle,
+            fence,
         })
+    }
+
+    /// Opaque `ID3D12Fence*` of the bridge's shared cross-API fence, or `None` when the D3D11
+    /// device could not open a shared fence (pre-`ID3D11Device5` runtime / driver) — callers
+    /// must then fall back to a CPU wait before pushing the frame.
+    ///
+    /// # Errors
+    ///
+    /// See [`Self::d3d12_resource_handle`].
+    pub fn d3d12_fence_handle(&self) -> Result<Option<NativeHandle>, EncodeError> {
+        self.fence
+            .as_ref()
+            .map(|f| to_native_handle(&f.d3d12))
+            .transpose()
+    }
+
+    /// Start one D3D12-side write of the shared texture with GPU-side ordering only (no CPU
+    /// wait). Enqueues `Signal(fence, wait_value)` on the D3D11 immediate context (after any
+    /// encoder work already submitted there, i.e. the previous frame's read) and flushes it.
+    /// The caller must then make its D3D12 queue `Wait(wait_value)` before the write and
+    /// `Signal(signal_value)` after it, then call [`Self::end_d3d12_write`].
+    ///
+    /// Returns `Ok(None)` when no shared fence is available (see [`Self::d3d12_fence_handle`]).
+    ///
+    /// **Cost:** one D3D11 `Flush` per frame (a CPU-side command-buffer submit, not a GPU
+    /// wait). **Assumption (not hardware-verified):** the WMF encoder MFT submits its reads of
+    /// the texture through this device's immediate context; an MFT that used a private context
+    /// would not be ordered by this fence.
+    ///
+    /// # Errors
+    ///
+    /// [`EncodeError::Backend`] if the D3D11 `Signal` call fails.
+    pub fn begin_d3d12_write(&self) -> Result<Option<D3d12WriteFence>, EncodeError> {
+        let Some(fence) = &self.fence else {
+            return Ok(None);
+        };
+        let wait_value = fence.last.fetch_add(2, Ordering::AcqRel) + 1;
+        // SAFETY: `fence.d3d11` and `fence.context` are live COM interfaces owned by `self`.
+        unsafe {
+            fence
+                .context
+                .Signal(&fence.d3d11, wait_value)
+                .map_err(|_| EncodeError::Backend)?;
+            fence.context.Flush();
+        }
+        Ok(Some(D3d12WriteFence {
+            wait_value,
+            signal_value: wait_value + 1,
+        }))
+    }
+
+    /// Finish a write begun with [`Self::begin_d3d12_write`]: enqueue a GPU-side
+    /// `Wait(fence, signal_value)` on the D3D11 immediate context, so encoder work submitted
+    /// after this call reads the texture only once the D3D12 write has completed. Never blocks
+    /// the CPU.
+    ///
+    /// # Errors
+    ///
+    /// [`EncodeError::InvalidInput`] when the bridge has no shared fence;
+    /// [`EncodeError::Backend`] if the D3D11 `Wait` call fails.
+    pub fn end_d3d12_write(&self, write: D3d12WriteFence) -> Result<(), EncodeError> {
+        let fence = self.fence.as_ref().ok_or(EncodeError::InvalidInput)?;
+        // SAFETY: `fence.d3d11` and `fence.context` are live COM interfaces owned by `self`.
+        unsafe { fence.context.Wait(&fence.d3d11, write.signal_value) }
+            .map_err(|_| EncodeError::Backend)
     }
 
     /// Opaque `ID3D12Resource*` for caller `CopyResource` into the shared heap.
@@ -231,6 +333,31 @@ fn device_from_handle(d3d12_device: NativeHandle) -> Result<ID3D12Device, Encode
     let borrowed =
         unsafe { ID3D12Device::from_raw_borrowed(&raw) }.ok_or(EncodeError::InvalidInput)?;
     Ok(borrowed.clone()) // clone: COM AddRef so we own the device for this call's lifetime
+}
+
+/// Best-effort shared fence creation: any failure (no `ID3D11Device5`, driver without shared
+/// fences) yields `None` and the caller keeps the CPU-wait fallback.
+fn open_cross_api_fence(d3d12: &ID3D12Device, d3d11: &ID3D11Device) -> Option<CrossApiFence> {
+    let device5: ID3D11Device5 = d3d11.cast().ok()?;
+    // SAFETY: plain fence creation on a live device.
+    let fence12: ID3D12Fence = unsafe { d3d12.CreateFence(0, D3D12_FENCE_FLAG_SHARED) }.ok()?;
+    // SAFETY: `fence12` was created with `D3D12_FENCE_FLAG_SHARED`.
+    let handle =
+        unsafe { d3d12.CreateSharedHandle(&fence12, None, GENERIC_ALL.0, PCWSTR::null()) }.ok()?;
+    let mut fence11: Option<ID3D11Fence> = None;
+    // SAFETY: `handle` is the NT handle just created for `fence12` on the same adapter.
+    let opened = unsafe { device5.OpenSharedFence(handle, &raw mut fence11) };
+    // SAFETY: the opened fence holds its own reference; our NT handle is no longer needed.
+    let _ = unsafe { CloseHandle(handle) };
+    opened.ok()?;
+    // SAFETY: `GetImmediateContext` on a live device.
+    let context: ID3D11DeviceContext4 = unsafe { d3d11.GetImmediateContext() }.ok()?.cast().ok()?;
+    Some(CrossApiFence {
+        d3d12: fence12,
+        d3d11: fence11?,
+        context,
+        last: AtomicU64::new(0),
+    })
 }
 
 /// Wrap a live COM interface's raw pointer as a [`NativeHandle`].

@@ -22,6 +22,19 @@ sonora-agc2 = { workspace = true, optional = true }
 sonora-simd = { workspace = true, optional = true }
 
 
+[dev-dependencies]
+criterion = { workspace = true }
+
+
+[[bench]]
+name = "sw_pixels"
+harness = false
+
+[[bench]]
+name = "sw_codecs"
+harness = false
+
+
 [lints]
 workspace = true
 

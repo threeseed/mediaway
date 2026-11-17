@@ -110,7 +110,11 @@ Workspace index: [`docs/roadmap.md`](../../../docs/roadmap.md).
       compile/test-verified-only addition even more than this crate's other VA-API backends, not
       an expected-to-work-on-most-hardware one
 - [ ] Vulkan Video encode (alternative/complement to VA-API)
-- [ ] GPU buffer Zero-Copy where supported (DMA-BUF surface import)
+- [x] GPU buffer Zero-Copy where supported (DMA-BUF surface import) — H.264 + HEVC
+      (`adr/linux/0006`, all-IDR in that mode); VP9/AV1 CPU-upload only. Compile/test-verified,
+      no VA-API hardware run
+- [x] `VideoEncoderConfig::in_flight` depth knob (VideoToolbox, `QuickSync`) —
+      [ADR-0007](../adr/0007-in-flight-depth-and-pipelining.md)
 
 ### 4 — Other
 

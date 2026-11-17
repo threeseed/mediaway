@@ -10,6 +10,7 @@ pub mod convert;
 pub mod flv;
 pub mod mp3;
 pub mod mp4;
+mod mp4_io;
 mod mp4_parser;
 pub mod ogg;
 pub mod replay;

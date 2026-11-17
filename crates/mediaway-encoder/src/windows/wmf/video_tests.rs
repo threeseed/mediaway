@@ -202,6 +202,7 @@ mod zero_copy {
             gop_size: 120,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         };
         let mut encoder = super::super::WmfVideoEncoder::open(&config).ok()?;
 
@@ -310,6 +311,7 @@ mod zero_copy {
             gop_size: 120,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         };
         for i in 0..200 {
             let Ok(mut encoder) = super::super::WmfVideoEncoder::open(&config) else {

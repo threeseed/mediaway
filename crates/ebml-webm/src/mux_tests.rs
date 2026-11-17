@@ -331,3 +331,81 @@ fn chunked_feed_still_round_trips() {
     }
     assert_eq!(count, 5);
 }
+
+// --- Byte identity vs the pre-scratch-buffer implementation (fresh `body`
+// `Vec` per block/cluster), kept here verbatim as the reference. ---
+
+fn reference_simple_block(out: &mut Vec<u8>, track: u64, rel: i16, key: bool, payload: &[u8]) {
+    let mut body = Vec::new();
+    crate::vint::encode_size(track, &mut body);
+    body.extend_from_slice(&rel.to_be_bytes());
+    body.push(if key { 0x80 } else { 0x00 });
+    body.extend_from_slice(payload);
+    crate::vint::encode_id(crate::ids::SIMPLE_BLOCK, out);
+    crate::vint::encode_size(body.len() as u64, out);
+    out.extend_from_slice(&body);
+}
+
+fn reference_laced_block(out: &mut Vec<u8>, track: u64, rel: i16, key: bool, payloads: &[&[u8]]) {
+    let mut body = Vec::new();
+    crate::vint::encode_size(track, &mut body);
+    body.extend_from_slice(&rel.to_be_bytes());
+    body.push(if key { 0x80 } else { 0x00 } | 0x06);
+    body.push(u8::try_from(payloads.len() - 1).unwrap());
+    let sizes: Vec<usize> = payloads[..payloads.len() - 1]
+        .iter()
+        .map(|p| p.len())
+        .collect();
+    crate::lacing::encode_ebml_lace_sizes(sizes.iter().copied(), &mut body);
+    for p in payloads {
+        body.extend_from_slice(p);
+    }
+    crate::vint::encode_id(crate::ids::SIMPLE_BLOCK, out);
+    crate::vint::encode_size(body.len() as u64, out);
+    out.extend_from_slice(&body);
+}
+
+#[test]
+fn blocks_match_reference_bytes() {
+    let big = vec![0xABu8; 20_000];
+    let mut scratch = vec![0xEE; 7]; // stale scratch contents must not leak
+    for (track, rel, key) in [(1u64, 0i16, true), (200, -5, false), (20_000, 32_767, true)] {
+        for payload in [&b""[..], &b"x"[..], &big[..126], &big[..]] {
+            let mut expected = Vec::new();
+            reference_simple_block(&mut expected, track, rel, key, payload);
+            let mut actual = Vec::new();
+            super::write_simple_block(&mut actual, &mut scratch, track, rel, key, payload);
+            assert_eq!(actual, expected);
+        }
+        let lace: [&[u8]; 3] = [&big[..300], b"ab", &big[..5000]];
+        let mut expected = Vec::new();
+        reference_laced_block(&mut expected, track, rel, key, &lace);
+        let mut actual = Vec::new();
+        super::write_laced_simple_block(&mut actual, &mut scratch, track, rel, key, &lace);
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
+fn close_cluster_matches_reference_bytes() {
+    for (base, cluster_len) in [(0i64, 1usize), (90_000, 200), (1 << 40, 70_000)] {
+        let mut mux = Muxer::new().begin();
+        mux.output.clear();
+        mux.scratch.extend_from_slice(&[1, 2, 3]);
+        mux.cluster = (0..cluster_len)
+            .map(|i| (i % 251).to_le_bytes()[0])
+            .collect();
+        mux.cluster_timecode = Some(base);
+
+        let mut body = Vec::new();
+        super::write_uint_elem(&mut body, crate::ids::TIMECODE, base.unsigned_abs());
+        body.extend_from_slice(&mux.cluster);
+        let mut expected = Vec::new();
+        crate::vint::encode_id(crate::ids::CLUSTER, &mut expected);
+        crate::vint::encode_size(body.len() as u64, &mut expected);
+        expected.extend_from_slice(&body);
+
+        mux.close_cluster();
+        assert_eq!(mux.output, expected);
+    }
+}

@@ -30,6 +30,11 @@ Workspace index: [`docs/roadmap.md`](../../../docs/roadmap.md).
 - [ ] Wire as `VideoEncoder` factory fallback (`mediaway-encoder`)
 - [x] PCM / raw audio passthrough encode + decode (`pcm` module — validates format/rate/channels, moves `Bytes` through unchanged)
 
+### 1b — CPU pixel utilities
+
+- [x] NV12/I420 conversion, I420/NV12 -> RGBA/BGRA (BT.601/709, video/full), bilinear scaler — [ADR-0005](../adr/0005-cpu-colorconv-and-scaler.md); benches in [`benchmarks.md`](benchmarks.md)
+- [ ] 10-bit / P010 / YUYV inputs
+
 ### 2 — AV1
 
 - [x] `rav1e` behind sans-io adapter (`av1` module) — [ADR-0002](../adr/0002-rav1e-av1-encode.md). 8-bit `PixelFormat::I420` input only; wired as `mediaway-encoder-windows`'s `AutoVideoEncoder` Software fallback (`EncodePathClass::Software`, AV1 only).

@@ -7,7 +7,15 @@
     reason = "crate-private helpers used by mux.rs/demux.rs; module itself is private"
 )]
 
+use smallvec::SmallVec;
+
 use crate::error::Error;
+
+/// Max PES header size this crate writes (9 fixed bytes + PTS + DTS).
+pub(crate) const MAX_PES_HEADER_LEN: usize = 19;
+
+/// Inline (stack) PES header bytes — no heap allocation per access unit.
+pub(crate) type PesHeader = SmallVec<[u8; MAX_PES_HEADER_LEN]>;
 
 /// Conventional MPEG-TS `stream_id` values (video: `0xE0`, audio: `0xC0`).
 pub(crate) const fn stream_id_for(is_video: bool) -> u8 {
@@ -22,7 +30,7 @@ pub(crate) fn build_pes_header(
     payload_len: usize,
     pts_90k: u64,
     dts_90k: Option<u64>,
-) -> Vec<u8> {
+) -> PesHeader {
     let (pts_dts_flags, header_data_length, ts_bytes, pts_prefix) = if dts_90k.is_some() {
         (0b11u8, 10u8, 10usize, 0b0011u8)
     } else {
@@ -31,7 +39,7 @@ pub(crate) fn build_pes_header(
     let after_length_len = 3 + ts_bytes + payload_len; // 2 flag bytes + header_data_length byte + timestamps + payload
     let pes_packet_length = u16::try_from(after_length_len).unwrap_or(0);
 
-    let mut out = Vec::with_capacity(9 + ts_bytes);
+    let mut out = PesHeader::new();
     out.extend_from_slice(&[0x00, 0x00, 0x01]);
     out.push(stream_id);
     out.extend_from_slice(&pes_packet_length.to_be_bytes());
@@ -49,7 +57,7 @@ pub(crate) fn build_pes_header(
     clippy::cast_possible_truncation,
     reason = "every operand is bit-masked to fit u8 immediately before the cast"
 )]
-fn write_timestamp(prefix4: u8, value33: u64, out: &mut Vec<u8>) {
+fn write_timestamp(prefix4: u8, value33: u64, out: &mut PesHeader) {
     let v = value33 & 0x1_FFFF_FFFF; // 33 bits
     out.push((prefix4 << 4) | ((((v >> 30) & 0x07) as u8) << 1) | 1);
     out.push(((v >> 22) & 0xFF) as u8);

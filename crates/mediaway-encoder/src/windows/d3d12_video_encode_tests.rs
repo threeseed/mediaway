@@ -216,6 +216,7 @@ fn d3d12_native_h264_encode_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -300,6 +301,7 @@ fn d3d12_native_h264_gop_encode_or_skip() {
         gop_size: 3,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -398,6 +400,7 @@ fn d3d12_native_h264_intra_refresh_encode_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: Some(4),
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -499,6 +502,7 @@ fn d3d12_native_h264_cbr_encode_or_skip() {
             vbv_buffer_size_bytes: None,
         }),
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -597,6 +601,7 @@ fn d3d12_native_hevc_encode_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -690,6 +695,7 @@ fn d3d12_native_hevc_gop_encode_or_skip() {
         gop_size: 3,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -779,6 +785,7 @@ fn d3d12_native_hevc_intra_refresh_encode_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: Some(4),
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {
@@ -871,6 +878,7 @@ fn d3d12_native_hevc_cbr_encode_or_skip() {
             vbv_buffer_size_bytes: None,
         }),
         intra_refresh_period: None,
+        in_flight: None,
     };
 
     let mut enc = match D3d12VideoEncoder::open(&cfg) {

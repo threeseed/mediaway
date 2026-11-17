@@ -163,6 +163,7 @@ fn encode_hevc() -> Option<(Vec<mediaway_common::Packet>, StreamInfo)> {
         gop_size: 4,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     }) {
         Ok(encoder) => encoder,
         Err(e) => {

@@ -1,5 +1,31 @@
 # Mediaway v0.2.3
 
+## Unreleased
+
+### Added
+
+- `rtp-core`: `h264::Packetizer::packetize_bytes` / `hevc::Packetizer::packetize_bytes` return `OutgoingPacket`s whose bodies are `Bytes` slices of the NAL unit (FU framing kept inline), plus `write_into` on `OutgoingPacket` / `RtpPacket` to serialize straight into a caller-owned send buffer
+- `mediaway-common`: `BufferPool`, a single-owner CPU byte-buffer pool (`take` / `recycle` / `recycle_bytes`), and a `BytesMut` re-export
+- `iso-bmff`: seekable demux mode (`Demuxer::new_seekable` + `poll_seek`) that reads moov-at-end MP4 by offset without buffering `mdat`; `mediaway-container::mp4::SeekDemuxer` drives it over any `Read + Seek`
+- `iso-bmff`: faststart `moov` relocation (`isobmff::faststart`, `plan_faststart`, `relocate_moov`) with `stco`→`co64` widening; `mediaway-container::mp4::faststart` streams a `Read + Seek` source to a `Write`
+- `iso-bmff`: `bitstream::to_avcc_bytes` / `to_hvcc_bytes` return an already length-prefixed `Bytes` without copying
+- `VideoEncoderConfig::in_flight` pipelining-depth request, honored by VideoToolbox (`MaxFrameDelayCount`) and oneVPL QuickSync (`AsyncDepth`); other backends ignore it (not hardware-tested)
+- VA-API HEVC encode accepts DMA-BUF surfaces (`VideoInputPreference::ZeroCopyGpu`, all-IDR in that mode), like the H.264 backend (not hardware-tested)
+- `D3d12SharedEncodeBridge` creates a shared D3D12/D3D11 fence when supported (`d3d12_fence_handle`, `begin_d3d12_write`, `end_d3d12_write`)
+- `mediaway-sw::colorconv` and `mediaway-sw::scale`: dependency-free CPU (`sw` path) NV12 <-> I420, I420/NV12 -> RGBA/BGRA (BT.601/BT.709, video/full range) and a bilinear scaler for planes and RGBA, with row-level APIs for caller-side parallelism
+
+### Changed
+
+- Fewer copies and allocations on mux/packetize hot paths with byte-identical output: MPEG-TS PES packetization no longer concatenates header + access unit, WebM blocks/clusters no longer stage a per-element body buffer, RTP `packetize` uses one shared allocation per NAL instead of one per fragment, and FLV demux payloads slice the tag buffer instead of copying
+- `iso-bmff` MP4 demuxer emits sample payloads as zero-copy `Bytes` slices of its input (no per-sample copy, no buffer compaction); only CENC-decrypted samples are copied
+- `mediaway::wgpu::WgpuDx12Bridge::copy_frame` orders the copy against the encoder with a GPU fence instead of a per-frame CPU wait when the shared fence is available; falls back to the CPU wait otherwise (not hardware-tested)
+- WebCodecs video decode luma readback no longer copies the whole frame into a temporary buffer
+- `mediaway-sw` H.264 software decode: faster dequantization, inverse transform, intra prediction and residual add (bit-exact; ~10% on a synthetic 720p I-frame)
+
+### Breaking
+
+- `VideoEncoderConfig` gained the `in_flight` field; struct literals must add `in_flight: None` (the `h264`/`hevc`/`av1`/`vp9` constructors are unaffected)
+
 ## What's new
 
 ### Added

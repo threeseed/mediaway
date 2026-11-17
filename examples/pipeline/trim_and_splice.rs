@@ -65,6 +65,7 @@ fn encode_clip(frames: &[VideoFrame]) -> Vec<u8> {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut enc = platform::AutoEncoder::open(&mediaway_encoder::auto::AutoVideoEncodeConfig {
         bitrate_bps: cfg.bitrate_bps,

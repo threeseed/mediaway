@@ -111,14 +111,7 @@ fn luma_plane(top: &[u8; 16], left: &[u8; 16], corner: u8) -> [u8; 256] {
     let c = (5 * v + 32) >> 6;
     let a = 16 * (l(15) + t(15));
 
-    let mut out = [0u8; 256];
-    for y in 0..16i32 {
-        for x in 0..16i32 {
-            let value = (a + b * (x - 7) + c * (y - 7) + 16) >> 5;
-            out[(y * 16 + x) as usize] = value.clamp(0, 255) as u8;
-        }
-    }
-    out
+    plane_fill::<16, 256>(a + 16 - 7 * b - 7 * c, b, c)
 }
 
 /// Predict a full 8x8 chroma block, one plane at a time (ITU-T H.264 § 8.3.4; 4:2:0 only).
@@ -179,17 +172,12 @@ fn chroma_dc(top: Option<&[u8; 8]>, left: Option<&[u8; 8]>) -> [u8; 64] {
     let bl = single_or_fallback(*left_bottom, *top_left);
     let br = combine_or_fallback(*top_right, *left_bottom);
 
+    let top_row = [tl, tl, tl, tl, tr, tr, tr, tr];
+    let bottom_row = [bl, bl, bl, bl, br, br, br, br];
     let mut out = [0u8; 64];
-    for y in 0..8 {
-        for x in 0..8 {
-            out[y * 8 + x] = match (x < 4, y < 4) {
-                (true, true) => tl,
-                (false, true) => tr,
-                (true, false) => bl,
-                (false, false) => br,
-            };
-        }
-    }
+    let (top_half, bottom_half) = out.split_at_mut(32);
+    top_half.as_chunks_mut::<8>().0.fill(top_row);
+    bottom_half.as_chunks_mut::<8>().0.fill(bottom_row);
     out
 }
 
@@ -243,12 +231,28 @@ fn chroma_plane(top: &[u8; 8], left: &[u8; 8], corner: u8) -> [u8; 64] {
     let c = (17 * v + 16) >> 5;
     let a = 16 * (l(7) + t(7));
 
-    let mut out = [0u8; 64];
-    for y in 0..8i32 {
-        for x in 0..8i32 {
-            let value = (a + b * (x - 3) + c * (y - 3) + 16) >> 5;
-            out[(y * 8 + x) as usize] = value.clamp(0, 255) as u8;
+    plane_fill::<8, 64>(a + 16 - 3 * b - 3 * c, b, c)
+}
+
+/// Shared Plane-mode fill: `out[y][x] = Clip1((origin + b * x + c * y) >> 5)`, where
+/// `origin` already folds in the spec's `a + 16` and the `- k * b - k * c` centring term.
+/// Row-incremental (`c` added per row) with a per-row lane ramp `b * x` precomputed once,
+/// so the inner loop is a fixed-width add/shift/clamp with no per-pixel multiply-by-index
+/// or bounds checks. Bit-exact with the per-pixel spec formula (pure integer reassociation).
+fn plane_fill<const N: usize, const NN: usize>(origin: i32, b: i32, c: i32) -> [u8; NN] {
+    let mut ramp = [0i32; N];
+    let mut step = 0i32;
+    for slot in &mut ramp {
+        *slot = step;
+        step += b;
+    }
+    let mut out = [0u8; NN];
+    let mut row_base = origin;
+    for row in out.as_chunks_mut::<N>().0 {
+        for (px, &r) in row.iter_mut().zip(&ramp) {
+            *px = ((row_base + r) >> 5).clamp(0, 255) as u8;
         }
+        row_base += c;
     }
     out
 }

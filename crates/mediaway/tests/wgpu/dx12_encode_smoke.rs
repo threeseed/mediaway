@@ -156,6 +156,7 @@ fn wgpu_dx12_bridge_encodes_h264_or_skip() {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     };
     let mut enc = match WindowsVideoEncoder::open(&vcfg) {
         Ok(e) => e,

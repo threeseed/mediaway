@@ -30,6 +30,7 @@ fn h264_cfg(width: u32, height: u32) -> VideoEncoderConfig {
         gop_size: 1,
         rate_control: None,
         intra_refresh_period: None,
+        in_flight: None,
     }
 }
 

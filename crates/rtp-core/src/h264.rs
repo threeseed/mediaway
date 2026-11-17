@@ -13,6 +13,7 @@ use bytes::Bytes;
 
 use crate::error::Error;
 use crate::header::{RtpHeader, RtpPacket};
+use crate::outgoing::{OutgoingPacket, PayloadPrefix, for_each_fragment, fragment_payloads_copied};
 
 /// FU indicator `Type` value identifying an FU-A (RFC 6184 §5.8).
 const FU_A_TYPE: u8 = 28;
@@ -106,31 +107,64 @@ impl Packetizer {
             return Ok(vec![self.build_packet(payload, timestamp, marker)]);
         }
 
-        let f = nal_header & 0x80;
-        let nri = nal_header & 0x60;
-        let fu_indicator = f | nri | FU_A_TYPE;
-        let body = &nal[1..];
-        let fragment_capacity = self.max_payload_size - FU_A_OVERHEAD;
-
-        let mut packets = Vec::with_capacity(body.len().div_ceil(fragment_capacity));
-        let mut offset = 0;
-        while offset < body.len() {
-            let end = (offset + fragment_capacity).min(body.len());
-            let is_first = offset == 0;
-            let is_last = end == body.len();
-
-            let mut payload = Vec::with_capacity(FU_A_OVERHEAD + (end - offset));
-            payload.push(fu_indicator);
-            payload.push((u8::from(is_first) << 7) | (u8::from(is_last) << 6) | nal_type);
-            payload.extend_from_slice(&body[offset..end]);
-
-            packets.push(self.build_packet(Bytes::from(payload), timestamp, is_last && marker));
-            offset = end;
-        }
+        let fu_indicator = (nal_header & 0xE0) | FU_A_TYPE;
+        let capacity = self.max_payload_size - FU_A_OVERHEAD;
+        let mut packets = Vec::with_capacity((nal.len() - 1).div_ceil(capacity));
+        fragment_payloads_copied(
+            nal,
+            1,
+            capacity,
+            |first, last| fu_a_prefix(fu_indicator, nal_type, first, last),
+            |payload, last| packets.push(self.build_packet(payload, timestamp, last && marker)),
+        );
         Ok(packets)
     }
 
-    const fn build_packet(&mut self, payload: Bytes, timestamp: u32, marker: bool) -> RtpPacket {
+    /// Zero-copy variant of [`Self::packetize`]: every returned packet's body
+    /// is a [`Bytes::slice`] of `nal` (refcount bump, no copy), with FU-A
+    /// framing carried inline in [`OutgoingPacket::prefix`]. Serialize with
+    /// [`OutgoingPacket::write`] / [`OutgoingPacket::write_into`].
+    ///
+    /// # Errors
+    ///
+    /// Same as [`Self::packetize`].
+    pub fn packetize_bytes(
+        &mut self,
+        nal: &Bytes,
+        timestamp: u32,
+        marker: bool,
+    ) -> Result<Vec<OutgoingPacket>, Error> {
+        let Some(&nal_header) = nal.first() else {
+            return Err(Error::NalUnitTooShort { needed: 1, got: 0 });
+        };
+        let nal_type = nal_header & 0x1F;
+        if !(1..=23).contains(&nal_type) {
+            return Err(Error::ReservedNalUnitType(nal_type));
+        }
+        if nal.len() <= self.max_payload_size {
+            let header = self.next_header(timestamp, marker);
+            return Ok(vec![OutgoingPacket {
+                header,
+                prefix: PayloadPrefix::EMPTY,
+                // clone: refcount bump of the shared NAL buffer (no byte copy).
+                body: nal.clone(),
+            }]);
+        }
+        let fu_indicator = (nal_header & 0xE0) | FU_A_TYPE;
+        let capacity = self.max_payload_size - FU_A_OVERHEAD;
+        let mut packets = Vec::with_capacity((nal.len() - 1).div_ceil(capacity));
+        for_each_fragment(nal.len() - 1, capacity, |first, last, r| {
+            let header = self.next_header(timestamp, last && marker);
+            packets.push(OutgoingPacket {
+                header,
+                prefix: fu_a_prefix(fu_indicator, nal_type, first, last),
+                body: nal.slice(r.start + 1..=r.end),
+            });
+        });
+        Ok(packets)
+    }
+
+    const fn next_header(&mut self, timestamp: u32, marker: bool) -> RtpHeader {
         let header = RtpHeader {
             marker,
             payload_type: self.payload_type,
@@ -139,8 +173,21 @@ impl Packetizer {
             ssrc: self.ssrc,
         };
         self.next_sequence_number = self.next_sequence_number.wrapping_add(1);
+        header
+    }
+
+    const fn build_packet(&mut self, payload: Bytes, timestamp: u32, marker: bool) -> RtpPacket {
+        let header = self.next_header(timestamp, marker);
         RtpPacket { header, payload }
     }
+}
+
+/// FU indicator + FU header (RFC 6184 §5.8).
+const fn fu_a_prefix(fu_indicator: u8, nal_type: u8, first: bool, last: bool) -> PayloadPrefix {
+    PayloadPrefix::two(
+        fu_indicator,
+        ((first as u8) << 7) | ((last as u8) << 6) | nal_type,
+    )
 }
 
 /// Reassembles H.264 NAL units from a stream of RTP packet **payloads**.

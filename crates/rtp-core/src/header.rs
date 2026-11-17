@@ -54,15 +54,36 @@ impl RtpHeader {
     ///
     /// [`Error::PayloadTypeOutOfRange`] if `payload_type` does not fit 7 bits.
     pub fn write(&self, out: &mut Vec<u8>) -> Result<(), Error> {
+        out.extend_from_slice(&self.to_bytes()?);
+        Ok(())
+    }
+
+    /// The 12-byte fixed header as an inline array (`P=0`, `X=0`, `CC=0`).
+    ///
+    /// # Errors
+    ///
+    /// [`Error::PayloadTypeOutOfRange`] if `payload_type` does not fit 7 bits.
+    pub const fn to_bytes(&self) -> Result<[u8; HEADER_LEN], Error> {
         if self.payload_type & 0x80 != 0 {
             return Err(Error::PayloadTypeOutOfRange(self.payload_type));
         }
-        out.push(RTP_VERSION << 6); // V=2, P=0, X=0, CC=0
-        out.push((u8::from(self.marker) << 7) | self.payload_type);
-        out.extend_from_slice(&self.sequence_number.to_be_bytes());
-        out.extend_from_slice(&self.timestamp.to_be_bytes());
-        out.extend_from_slice(&self.ssrc.to_be_bytes());
-        Ok(())
+        let seq = self.sequence_number.to_be_bytes();
+        let ts = self.timestamp.to_be_bytes();
+        let ssrc = self.ssrc.to_be_bytes();
+        Ok([
+            RTP_VERSION << 6, // V=2, P=0, X=0, CC=0
+            ((self.marker as u8) << 7) | self.payload_type,
+            seq[0],
+            seq[1],
+            ts[0],
+            ts[1],
+            ts[2],
+            ts[3],
+            ssrc[0],
+            ssrc[1],
+            ssrc[2],
+            ssrc[3],
+        ])
     }
 
     /// Parse the fixed header from the start of `data`.
@@ -148,9 +169,30 @@ impl RtpPacket {
     ///
     /// [`Error::PayloadTypeOutOfRange`] — see [`RtpHeader::write`].
     pub fn write(&self, out: &mut Vec<u8>) -> Result<(), Error> {
+        out.reserve(HEADER_LEN + self.payload.len());
         self.header.write(out)?;
         out.extend_from_slice(&self.payload);
         Ok(())
+    }
+
+    /// Serialize into the start of `out` without allocating; returns the
+    /// number of bytes written (`12 + payload.len()`).
+    ///
+    /// # Errors
+    ///
+    /// - [`Error::BufferTooShort`] if `out` is too small (nothing written).
+    /// - [`Error::PayloadTypeOutOfRange`] — see [`RtpHeader::write`].
+    pub fn write_into(&self, out: &mut [u8]) -> Result<usize, Error> {
+        let needed = HEADER_LEN + self.payload.len();
+        if out.len() < needed {
+            return Err(Error::BufferTooShort {
+                needed,
+                got: out.len(),
+            });
+        }
+        out[..HEADER_LEN].copy_from_slice(&self.header.to_bytes()?);
+        out[HEADER_LEN..needed].copy_from_slice(&self.payload);
+        Ok(needed)
     }
 
     /// Parse one RTP packet (header + remaining bytes as payload) from `data`.

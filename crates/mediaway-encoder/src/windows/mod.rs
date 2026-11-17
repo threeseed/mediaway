@@ -35,7 +35,7 @@ pub mod auto;
 #[cfg(all(windows, feature = "video"))]
 mod d3d12_share;
 #[cfg(all(windows, feature = "video"))]
-pub use d3d12_share::D3d12SharedEncodeBridge;
+pub use d3d12_share::{D3d12SharedEncodeBridge, D3d12WriteFence};
 
 // Not wired into `WindowsVideoEncoder`/`auto` yet — see the module's own doc comment.
 // Declared (non-`pub`) so its `#[cfg(test)]` hardware-gated tests compile and run.
@@ -342,6 +342,7 @@ mod tests {
             gop_size: 1,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         };
         let mut enc = match WindowsVideoEncoder::open(&cfg) {
             Ok(e) => e,
@@ -416,6 +417,7 @@ mod tests {
             gop_size: 1,
             rate_control: None,
             intra_refresh_period: None,
+            in_flight: None,
         };
         let mut enc = match WindowsVideoEncoder::open(&cfg) {
             Ok(e) => e,
@@ -485,6 +487,7 @@ mod tests {
                 gop_size: 1,
                 rate_control: None,
                 intra_refresh_period: None,
+                in_flight: None,
             };
             let mut enc = match WindowsVideoEncoder::open(&cfg) {
                 Ok(e) => e,
@@ -613,6 +616,7 @@ mod tests {
                 gop_size: 1,
                 rate_control: None,
                 intra_refresh_period: None,
+                in_flight: None,
             };
             let mut enc = match WindowsVideoEncoder::open(&cfg) {
                 Ok(e) => e,

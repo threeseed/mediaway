@@ -371,3 +371,18 @@ fn unrecognized_video_codec_id_is_dropped() {
     assert!(demux.poll_packet().is_none());
     assert!(demux.streams().is_empty());
 }
+
+#[test]
+fn demuxed_payloads_slice_the_tag_buffer_without_copying() {
+    let video = avc_nalu_tag(0, true, 0, &[0, 0, 0, 2, 0x65, 0x88]);
+    let audio = aac_raw_tag(0, &[0x21, 0x10, 0x05]);
+    let mut demux = Demuxer::new();
+
+    let v = demux.handle_video(&video).expect("video packet");
+    assert_eq!(&v.payload[..], &video.data[5..]);
+    assert_eq!(v.payload.as_ptr(), video.data[5..].as_ptr());
+
+    let a = demux.handle_audio(&audio).expect("audio packet");
+    assert_eq!(&a.payload[..], &audio.data[2..]);
+    assert_eq!(a.payload.as_ptr(), audio.data[2..].as_ptr());
+}
