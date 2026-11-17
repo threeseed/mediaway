@@ -8,11 +8,13 @@
 mod formats;
 mod frame;
 mod gpu;
+mod pool;
 
-pub use bytes::Bytes;
+pub use bytes::{Bytes, BytesMut};
 pub use formats::{ColorRange, PixelFormat, SampleFormat};
 pub use frame::{AudioFrame, VideoFrame, VideoFrameStorage};
 pub use gpu::{DmaBufDescriptor, DmaBufPlane, GpuBufferHandle, GpuDeviceHandle, NativeHandle};
+pub use pool::BufferPool;
 
 /// Integer rational timebase (`num / den` seconds) for precise fractional timestamp conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

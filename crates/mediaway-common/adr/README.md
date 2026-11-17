@@ -2,7 +2,7 @@
 
 | ID | Title | Status |
 |----|-------|--------|
-| — | *(none yet)* | |
+| [0001](0001-cpu-buffer-pool.md) | Single-owner CPU byte-buffer pool (`BufferPool`) | Accepted |
 
 Template: [`template.md`](template.md)
 
