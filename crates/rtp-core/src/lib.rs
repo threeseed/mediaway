@@ -21,9 +21,11 @@ mod error;
 pub mod h264;
 mod header;
 pub mod hevc;
+mod outgoing;
 
 pub use error::Error;
 pub use header::{HEADER_LEN, RTP_VERSION, RtpHeader, RtpPacket};
+pub use outgoing::{OutgoingPacket, PayloadPrefix};
 
 /// RTP clock rate for H.264 and HEVC video, in Hz.
 ///
